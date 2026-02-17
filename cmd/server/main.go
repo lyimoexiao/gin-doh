@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
 	"flag"
 	"fmt"
 	"net/http"
@@ -13,6 +14,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"github.com/lyimoexiao/gin-doh/internal/config"
+	"github.com/lyimoexiao/gin-doh/internal/ech"
 	"github.com/lyimoexiao/gin-doh/internal/handler"
 	"github.com/lyimoexiao/gin-doh/internal/logger"
 	"github.com/lyimoexiao/gin-doh/internal/middleware"
@@ -60,13 +62,25 @@ func main() {
 		log.Infof("全局代理已启用: %s", cfg.Upstream.Proxy.Address)
 	}
 
+	// 初始化全局 ECH 客户端配置 (用于连接上游 DoH 服务器)
+	var globalECHConfig *ech.ClientECHConfig
+	if cfg.Server.TLS.ECH.ConfigListFile != "" {
+		globalECHConfig = ech.NewClientECHConfig()
+		if err := globalECHConfig.LoadConfigListFromFile(cfg.Server.TLS.ECH.ConfigListFile); err != nil {
+			log.Warnf("加载全局 ECH 配置失败: %v", err)
+			globalECHConfig = nil
+		} else {
+			log.Info("全局 ECH 客户端配置已加载")
+		}
+	}
+
 	// 创建解析器
 	factory := upstream.NewFactory(globalProxy)
 	resolvers := make([]upstream.Resolver, 0, len(cfg.Upstream.Servers))
 	priorities := make([]int, 0, len(cfg.Upstream.Servers))
 
 	for _, serverCfg := range cfg.Upstream.Servers {
-		resolver, err := factory.CreateResolver(&serverCfg)
+		resolver, err := factory.CreateResolverWithECH(&serverCfg, globalECHConfig)
 		if err != nil {
 			log.Warnf("创建解析器失败 %s://%s: %v", serverCfg.Protocol, serverCfg.Address, err)
 			continue
@@ -135,8 +149,37 @@ func main() {
 	go func() {
 		var err error
 		if cfg.Server.TLS.Enabled {
+			// 配置 TLS
+			tlsConfig := &tls.Config{
+				MinVersion: tls.VersionTLS12,
+				NextProtos: []string{"h2", "http/1.1"},
+			}
+
+			// 加载证书
+			cert, err := tls.LoadX509KeyPair(cfg.Server.TLS.CertFile, cfg.Server.TLS.KeyFile)
+			if err != nil {
+				log.Fatalf("加载证书失败: %v", err)
+			}
+			tlsConfig.Certificates = []tls.Certificate{cert}
+
+			// 配置服务端 ECH
+			if cfg.Server.TLS.ECH.Enabled {
+				serverECH, err := setupServerECH(&cfg.Server.TLS.ECH, log)
+				if err != nil {
+					log.Warnf("配置 ECH 失败: %v", err)
+				} else if serverECH != nil {
+					tlsConfig, err = serverECH.GetTLSConfig(tlsConfig)
+					if err != nil {
+						log.Warnf("应用 ECH 配置失败: %v", err)
+					} else {
+						log.Info("服务端 ECH 已启用")
+					}
+				}
+			}
+
+			srv.TLSConfig = tlsConfig
 			log.Infof("HTTPS 服务器启动，监听 %s", cfg.Server.Listen)
-			err = srv.ListenAndServeTLS(cfg.Server.TLS.CertFile, cfg.Server.TLS.KeyFile)
+			err = srv.ListenAndServeTLS("", "") // 证书已在 TLSConfig 中配置
 		} else {
 			log.Infof("HTTP 服务器启动，监听 %s", cfg.Server.Listen)
 			err = srv.ListenAndServe()
@@ -162,4 +205,37 @@ func main() {
 	}
 
 	log.Info("服务器已关闭")
+}
+
+// setupServerECH 配置服务端 ECH
+func setupServerECH(cfg *config.ECHConfig, log *logger.Logger) (*ech.ServerECHConfig, error) {
+	serverECH := ech.NewServerECHConfig(cfg.PublicName)
+
+	// 如果有配置文件，直接加载
+	if cfg.ConfigFile != "" {
+		if err := serverECH.LoadConfigListFromFile(cfg.ConfigFile); err != nil {
+			return nil, fmt.Errorf("加载 ECH 配置文件失败: %w", err)
+		}
+	}
+
+	// 如果有私钥文件，加载私钥
+	if cfg.KeyFile != "" {
+		// 尝试加载私钥 (假设配置 ID 为 0)
+		key, err := ech.LoadPrivateKey(cfg.KeyFile, 0)
+		if err != nil {
+			return nil, fmt.Errorf("加载 ECH 私钥失败: %w", err)
+		}
+		if err := serverECH.AddKey(key); err != nil {
+			return nil, fmt.Errorf("添加 ECH 密钥失败: %w", err)
+		}
+	}
+
+	// 如果有重试配置文件
+	if cfg.RetryConfigFile != "" {
+		if err := serverECH.LoadRetryConfigFromFile(cfg.RetryConfigFile); err != nil {
+			log.Warnf("加载 ECH 重试配置失败: %v", err)
+		}
+	}
+
+	return serverECH, nil
 }

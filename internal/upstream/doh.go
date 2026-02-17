@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/lyimoexiao/gin-doh/internal/ech"
 	"github.com/lyimoexiao/gin-doh/internal/proxy"
 )
 
@@ -19,16 +20,31 @@ type DoHResolver struct {
 	url        string
 	httpClient *http.Client
 	proxyMgr   *proxy.Manager
+	echConfig  *ech.ClientECHConfig // ECH 客户端配置
+	echUsed    bool
+}
+
+// DoHResolverOption DoH 解析器选项
+type DoHResolverOption func(*DoHResolver)
+
+// WithECH 为 DoH 解析器添加 ECH 支持
+func WithECH(echConfig *ech.ClientECHConfig) DoHResolverOption {
+	return func(r *DoHResolver) {
+		r.echConfig = echConfig
+	}
 }
 
 // NewDoHResolver 创建 DoH 解析器
-func NewDoHResolver(url string, timeout time.Duration, proxyMgr *proxy.Manager) *DoHResolver {
+func NewDoHResolver(url string, timeout time.Duration, proxyMgr *proxy.Manager, opts ...DoHResolverOption) *DoHResolver {
+	// 创建 TLS 配置
+	tlsConfig := &tls.Config{
+		MinVersion: tls.VersionTLS12,
+	}
+
 	// 创建 HTTP 客户端
 	transport := &http.Transport{
-		TLSClientConfig: &tls.Config{
-			MinVersion: tls.VersionTLS12,
-		},
-		IdleConnTimeout:   30 * time.Second,
+		TLSClientConfig:  tlsConfig,
+		IdleConnTimeout:  30 * time.Second,
 		DisableKeepAlives: false,
 		MaxIdleConns:      10,
 	}
@@ -43,7 +59,7 @@ func NewDoHResolver(url string, timeout time.Duration, proxyMgr *proxy.Manager) 
 		Timeout:   timeout,
 	}
 
-	return &DoHResolver{
+	resolver := &DoHResolver{
 		BaseResolver: BaseResolver{
 			protocol: "doh",
 			address:  url,
@@ -53,6 +69,20 @@ func NewDoHResolver(url string, timeout time.Duration, proxyMgr *proxy.Manager) 
 		httpClient: httpClient,
 		proxyMgr:   proxyMgr,
 	}
+
+	// 应用选项
+	for _, opt := range opts {
+		opt(resolver)
+	}
+
+	// 如果有 ECH 配置，更新 TLS 配置
+	if resolver.echConfig != nil && len(resolver.echConfig.ConfigList) > 0 {
+		tlsConfig, _ = resolver.echConfig.GetTLSConfig(tlsConfig)
+		transport.TLSClientConfig = tlsConfig
+		resolver.echUsed = true
+	}
+
+	return resolver
 }
 
 // Resolve 执行 DNS 解析
@@ -126,5 +156,13 @@ func (r *DoHResolver) ResolveGET(ctx context.Context, query []byte) ([]byte, err
 
 // String 返回服务器描述
 func (r *DoHResolver) String() string {
+	if r.echUsed {
+		return "doh+ech://" + r.url
+	}
 	return "doh://" + r.url
+}
+
+// ECHUsed 返回是否使用了 ECH
+func (r *DoHResolver) ECHUsed() bool {
+	return r.echUsed
 }

@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/lyimoexiao/gin-doh/internal/config"
+	"github.com/lyimoexiao/gin-doh/internal/ech"
 	"github.com/lyimoexiao/gin-doh/internal/proxy"
 )
 
@@ -22,6 +23,11 @@ func NewFactory(globalProxy *proxy.Manager) *Factory {
 
 // CreateResolver 创建解析器
 func (f *Factory) CreateResolver(cfg *config.UpstreamServer) (Resolver, error) {
+	return f.CreateResolverWithECH(cfg, nil)
+}
+
+// CreateResolverWithECH 创建解析器 (支持 ECH 配置)
+func (f *Factory) CreateResolverWithECH(cfg *config.UpstreamServer, globalECHConfig *ech.ClientECHConfig) (Resolver, error) {
 	// 确定使用的代理
 	var proxyMgr *proxy.Manager
 	var err error
@@ -43,6 +49,25 @@ func (f *Factory) CreateResolver(cfg *config.UpstreamServer) (Resolver, error) {
 		timeout = 5 * time.Second
 	}
 
+	// 准备 ECH 配置
+	var echConfig *ech.ClientECHConfig
+	if cfg.ECH != nil && cfg.ECH.Enabled {
+		// 使用服务器级 ECH 配置
+		echConfig = ech.NewClientECHConfig()
+		if cfg.ECH.ConfigList != "" {
+			// 尝试作为 Base64 加载
+			if err := echConfig.LoadConfigListFromBase64(cfg.ECH.ConfigList); err != nil {
+				// 尝试作为文件路径加载
+				if err := echConfig.LoadConfigListFromFile(cfg.ECH.ConfigList); err != nil {
+					return nil, err
+				}
+			}
+		}
+	} else if globalECHConfig != nil && len(globalECHConfig.ConfigList) > 0 {
+		// 使用全局 ECH 配置
+		echConfig = globalECHConfig
+	}
+
 	// 根据协议创建解析器
 	switch cfg.Protocol {
 	case "udp":
@@ -50,6 +75,9 @@ func (f *Factory) CreateResolver(cfg *config.UpstreamServer) (Resolver, error) {
 	case "tcp":
 		return NewTCPResolver(cfg.Address, timeout), nil
 	case "doh":
+		if echConfig != nil {
+			return NewDoHResolver(cfg.URL, timeout, proxyMgr, WithECH(echConfig)), nil
+		}
 		return NewDoHResolver(cfg.URL, timeout, proxyMgr), nil
 	case "dot":
 		return NewDoTResolver(cfg.Address, cfg.ServerName, timeout, proxyMgr), nil

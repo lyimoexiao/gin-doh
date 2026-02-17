@@ -26,9 +26,23 @@ type ServerConfig struct {
 
 // TLSConfig TLS 配置
 type TLSConfig struct {
-	Enabled  bool   `yaml:"enabled"`
-	CertFile string `yaml:"cert_file"`
-	KeyFile  string `yaml:"key_file"`
+	Enabled  bool        `yaml:"enabled"`
+	CertFile string      `yaml:"cert_file"`
+	KeyFile  string      `yaml:"key_file"`
+	ECH      ECHConfig   `yaml:"ech"` // ECH 配置
+}
+
+// ECHConfig ECH (Encrypted Client Hello) 配置
+type ECHConfig struct {
+	// 服务端 ECH 配置
+	Enabled       bool   `yaml:"enabled"`          // 是否启用 ECH
+	ConfigFile    string `yaml:"config_file"`      // ECH 配置文件路径 (包含公钥配置列表)
+	KeyFile       string `yaml:"key_file"`         // ECH 私钥文件路径
+	PublicName    string `yaml:"public_name"`      // 公共名称 (用于 ECH)
+	RetryConfigFile string `yaml:"retry_config_file"` // 重试配置文件路径
+
+	// 客户端 ECH 配置 (用于上游 DoH 连接)
+	ConfigListFile string `yaml:"config_list_file"` // ECH 配置列表文件路径
 }
 
 // HTTP2Config HTTP/2 配置
@@ -90,13 +104,20 @@ type ProxyConfig struct {
 
 // UpstreamServer 上游服务器配置
 type UpstreamServer struct {
-	Protocol   string       `yaml:"protocol"`    // udp, tcp, doh, dot
-	Address    string       `yaml:"address"`     // 用于 udp, tcp, dot
-	URL        string       `yaml:"url"`         // 用于 doh
-	ServerName string       `yaml:"server_name"` // 用于 dot
+	Protocol   string        `yaml:"protocol"`    // udp, tcp, doh, dot
+	Address    string        `yaml:"address"`     // 用于 udp, tcp, dot
+	URL        string        `yaml:"url"`         // 用于 doh
+	ServerName string        `yaml:"server_name"` // 用于 dot
 	Timeout    time.Duration `yaml:"timeout"`
-	Priority   int          `yaml:"priority"` // 用于 failover 模式
-	Proxy      *ProxyConfig `yaml:"proxy"`    // 服务器级代理配置
+	Priority   int           `yaml:"priority"` // 用于 failover 模式
+	Proxy      *ProxyConfig  `yaml:"proxy"`    // 服务器级代理配置
+	ECH        *ClientECHConfig `yaml:"ech"` // ECH 客户端配置
+}
+
+// ClientECHConfig 客户端 ECH 配置 (用于连接上游服务器)
+type ClientECHConfig struct {
+	Enabled     bool   `yaml:"enabled"`       // 是否启用 ECH
+	ConfigList  string `yaml:"config_list"`   // ECH 配置列表 (Base64 编码或文件路径)
 }
 
 // LoggingConfig 日志配置
