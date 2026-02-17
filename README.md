@@ -42,7 +42,7 @@ A high-performance DNS-over-HTTPS (DoH) server implementation based on [Gin](htt
 The recommended way to run gin-doh is using Docker:
 
 ```bash
-# Pull from registry (if published)
+# Pull from registry
 docker pull ghcr.io/lyimoexiao/gin-doh:latest
 
 # Or build from source
