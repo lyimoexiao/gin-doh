@@ -1,0 +1,110 @@
+# gin-doh 配置示例
+# DoH 服务器配置
+
+server:
+  listen: ":8080"
+  
+  # TLS 配置
+  tls:
+    enabled: false
+    cert_file: /path/to/cert.pem
+    key_file: /path/to/key.pem
+  
+  # HTTP/2 配置
+  http2:
+    enabled: true
+  
+  # HTTP/3 配置
+  http3:
+    enabled: false
+  
+  # DNS 查询路径
+  dns_paths:
+    - path: /dns-query
+      enabled: true
+    - path: /resolve
+      enabled: true
+  
+  # 速率限制
+  rate_limit:
+    enabled: false
+    requests_per: 100
+    burst: 200
+    max_query_size: 65535
+
+# 上游 DNS 服务器配置
+upstream:
+  # 选择策略: round-robin, failover, fastest
+  strategy: round-robin
+  
+  # 健康检查 (用于 failover 模式)
+  health_check:
+    enabled: true
+    interval: 30s
+    failure_threshold: 3
+    recovery_threshold: 2
+  
+  # 最快响应配置 (用于 fastest 模式)
+  fastest_config:
+    window_size: 100
+    min_samples: 10
+    cooldown: 60s
+  
+  # 全局代理配置 (可选)
+  proxy:
+    enabled: false
+    type: socks5          # http 或 socks5
+    address: 127.0.0.1:1080
+    # username: user
+    # password: pass
+  
+  # 上游服务器列表
+  servers:
+    # DoH 服务器
+    - protocol: doh
+      url: https://cloudflare-dns.com/dns-query
+      timeout: 10s
+    
+    # - protocol: doh
+    #   url: https://dns.google/dns-query
+    #   timeout: 10s
+    
+    # DoT 服务器
+    # - protocol: dot
+    #   address: 1.1.1.1:853
+    #   server_name: cloudflare-dns.com
+    #   timeout: 10s
+    
+    # UDP DNS
+    # - protocol: udp
+    #   address: 8.8.8.8:53
+    #   timeout: 5s
+    
+    # - protocol: udp
+    #   address: 1.1.1.1:53
+    #   timeout: 5s
+    
+    # TCP DNS
+    # - protocol: tcp
+    #   address: 8.8.8.8:53
+    #   timeout: 5s
+
+# 日志配置
+logging:
+  level: info              # debug, info, warn, error
+  format: json             # json 或 console
+  output: stdout
+  
+  # 日志字段
+  fields:
+    - timestamp
+    - client_ip
+    - method
+    - path
+    - query_name
+    - query_type
+    - upstream
+    - upstream_protocol
+    - response_code
+    - latency_ms
+    - status
