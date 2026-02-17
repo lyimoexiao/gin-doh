@@ -46,13 +46,14 @@ func (h *DoHHandler) Handle(c *gin.Context) {
 	var query []byte
 	var err error
 	var queryName, queryTypeStr string
+	var ecsInjected bool // Track if ECS was auto-injected
 
 	// Parse query based on request method
 	switch c.Request.Method {
 	case http.MethodPost:
 		query, err = h.parsePostRequest(c)
 	case http.MethodGet:
-		query, queryName, queryTypeStr, err = h.parseGetRequestWithInfo(c)
+		query, queryName, queryTypeStr, ecsInjected, err = h.parseGetRequestWithInfo(c)
 	default:
 		c.JSON(http.StatusMethodNotAllowed, gin.H{"error": "method not allowed"})
 		return
@@ -81,6 +82,19 @@ func (h *DoHHandler) Handle(c *gin.Context) {
 	queryType, _ := dns.ExtractQueryType(query)
 	if queryTypeStr == "" {
 		queryTypeStr = dns.TypeToString(queryType)
+	}
+
+	// For POST and Wire Format GET, try to inject ECS from client IP
+	if !ecsInjected {
+		clientIP := c.ClientIP()
+		ecs := dns.ClientIPToECS(clientIP)
+		if ecs != "" {
+			// Try to inject ECS into the query
+			modifiedQuery, injectErr := dns.InjectECS(query, ecs)
+			if injectErr == nil {
+				query = modifiedQuery
+			}
+		}
 	}
 
 	// Select upstream resolver
@@ -142,23 +156,24 @@ func (h *DoHHandler) parsePostRequest(c *gin.Context) ([]byte, error) {
 }
 
 // parseGetRequestWithInfo parses a GET request and returns query info
-func (h *DoHHandler) parseGetRequestWithInfo(c *gin.Context) (query []byte, queryName, queryType string, err error) {
+// Returns: query, queryName, queryType, ecsInjected, error
+func (h *DoHHandler) parseGetRequestWithInfo(c *gin.Context) (query []byte, queryName, queryType string, ecsInjected bool, err error) {
 	// Check if it's a Wire Format parameter
 	dnsParam := c.Query("dns")
 	if dnsParam != "" {
 		// Wire Format GET request
 		query, err = dns.DecodeBase64URL(dnsParam)
 		if err != nil {
-			return nil, "", "", ErrInvalidBase64
+			return nil, "", "", false, ErrInvalidBase64
 		}
-		// Wire format requires parsing name and type later
-		return query, "", "", nil
+		// For wire format, ECS injection will be handled in Handle()
+		return query, "", "", false, nil
 	}
 
 	// JSON Format GET request
 	name := c.Query("name")
 	if name == "" {
-		return nil, "", "", ErrNameRequired
+		return nil, "", "", false, ErrNameRequired
 	}
 
 	// Get query type
@@ -179,6 +194,15 @@ func (h *DoHHandler) parseGetRequestWithInfo(c *gin.Context) (query []byte, quer
 		ecs = c.Query("subnet") // Alternative parameter name (like Google DoH)
 	}
 
+	// If no ECS provided, auto-detect from client IP
+	if ecs == "" {
+		clientIP := c.ClientIP()
+		ecs = dns.ClientIPToECS(clientIP)
+		if ecs != "" {
+			ecsInjected = true
+		}
+	}
+
 	// Build DNS query
 	query, err = dns.BuildQueryWithOpts(name, qtype, dns.QueryOptions{
 		CD:  cd,
@@ -186,10 +210,10 @@ func (h *DoHHandler) parseGetRequestWithInfo(c *gin.Context) (query []byte, quer
 		ECS: ecs,
 	})
 	if err != nil {
-		return nil, "", "", err
+		return nil, "", "", false, err
 	}
 
-	return query, name + ".", qtypeStr, nil
+	return query, name + ".", qtypeStr, ecsInjected, nil
 }
 
 // handleJSONResponse handles JSON response
