@@ -100,7 +100,7 @@ func RequestIDMiddleware() gin.HandlerFunc {
 // RealIPMiddleware extracts real client IP from proxy headers
 // Supports X-Forwarded-For, X-Real-IP, and X-Client-IP headers
 // Only trusts headers from configured trusted proxies
-func RealIPMiddleware(trustedProxies []string) gin.HandlerFunc {
+func RealIPMiddleware(trustedProxies []string, customHeader string) gin.HandlerFunc {
 	// Parse trusted proxies into CIDR networks
 	trustedNets := make([]*net.IPNet, 0, len(trustedProxies))
 	for _, proxy := range trustedProxies {
@@ -133,8 +133,8 @@ func RealIPMiddleware(trustedProxies []string) gin.HandlerFunc {
 			return
 		}
 
-		// Check if the remote address is a trusted proxy
-		isTrusted := false
+		// Check if the remote address is a trusted proxy (or trust all if no trusted proxies configured)
+		isTrusted := len(trustedNets) == 0
 		for _, ipNet := range trustedNets {
 			if ipNet.Contains(remoteIP) {
 				isTrusted = true
@@ -142,18 +142,20 @@ func RealIPMiddleware(trustedProxies []string) gin.HandlerFunc {
 			}
 		}
 
-		if !isTrusted && len(trustedNets) > 0 {
+		if !isTrusted {
 			// Not from a trusted proxy, don't trust headers
 			c.Next()
 			return
 		}
 
 		// Try to get real IP from headers (in order of preference)
-		realIP := extractRealIP(c)
+		realIP := extractRealIP(c, customHeader)
 		if realIP != "" {
 			// Store the original remote address
 			c.Set("original_remote_addr", c.ClientIP())
-			// Update the request's RemoteAddr
+			// Store the extracted real IP for use by handlers
+			c.Set("real_ip", realIP)
+			// Update the request's RemoteAddr for compatibility
 			c.Request.RemoteAddr = realIP
 		}
 
@@ -161,8 +163,30 @@ func RealIPMiddleware(trustedProxies []string) gin.HandlerFunc {
 	}
 }
 
+// GetRealIP retrieves the real client IP from gin context
+// Falls back to c.ClientIP() if not set
+func GetRealIP(c *gin.Context) string {
+	if realIP, exists := c.Get("real_ip"); exists {
+		if ip, ok := realIP.(string); ok {
+			return ip
+		}
+	}
+	return c.ClientIP()
+}
+
 // extractRealIP extracts the real client IP from proxy headers
-func extractRealIP(c *gin.Context) string {
+func extractRealIP(c *gin.Context, customHeader string) string {
+	// Try custom header first if specified
+	if customHeader != "" {
+		customIP := c.GetHeader(customHeader)
+		if customIP != "" {
+			ip := strings.TrimSpace(customIP)
+			if net.ParseIP(ip) != nil {
+				return ip
+			}
+		}
+	}
+
 	// Try X-Forwarded-For first (most common)
 	xff := c.GetHeader("X-Forwarded-For")
 	if xff != "" {

@@ -10,6 +10,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"github.com/lyimoexiao/gin-doh/internal/logger"
+	"github.com/lyimoexiao/gin-doh/internal/middleware"
 	"github.com/lyimoexiao/gin-doh/internal/strategy"
 	"github.com/lyimoexiao/gin-doh/internal/upstream"
 	"github.com/lyimoexiao/gin-doh/pkg/dns"
@@ -86,7 +87,7 @@ func (h *DoHHandler) Handle(c *gin.Context) {
 
 	// For POST and Wire Format GET, try to inject ECS from client IP
 	if !ecsInjected {
-		clientIP := c.ClientIP()
+		clientIP := middleware.GetRealIP(c)
 		ecs := dns.ClientIPToECS(clientIP)
 		if ecs != "" {
 			// Try to inject ECS into the query
@@ -196,7 +197,7 @@ func (h *DoHHandler) parseGetRequestWithInfo(c *gin.Context) (query []byte, quer
 
 	// If no ECS provided, auto-detect from client IP
 	if ecs == "" {
-		clientIP := c.ClientIP()
+		clientIP := middleware.GetRealIP(c)
 		ecs = dns.ClientIPToECS(clientIP)
 		if ecs != "" {
 			ecsInjected = true
@@ -280,7 +281,7 @@ func (h *DoHHandler) logRequest(c *gin.Context, queryName, queryType string, res
 
 	h.log.LogDNSRequest(&logger.DNSRequestFields{
 		Timestamp:        dns.CurrentTimestamp(),
-		ClientIP:         c.ClientIP(),
+		ClientIP:         middleware.GetRealIP(c),
 		Method:           c.Request.Method,
 		Path:             c.Request.URL.Path,
 		QueryName:        queryName,

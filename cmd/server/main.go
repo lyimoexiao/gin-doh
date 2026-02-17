@@ -188,8 +188,12 @@ func runServer(cfg *config.Config, dohHandler *handler.DoHHandler, log *logger.L
 
 	// Real IP middleware (must be before other middlewares that use ClientIP)
 	if len(cfg.Server.TrustedProxies) > 0 {
-		router.Use(middleware.RealIPMiddleware(cfg.Server.TrustedProxies))
+		router.Use(middleware.RealIPMiddleware(cfg.Server.TrustedProxies, cfg.Server.RealIPHeader))
 		log.Infof("Trusted proxies configured: %v", cfg.Server.TrustedProxies)
+	} else if cfg.Server.RealIPHeader != "" {
+		// If only custom header is set without trusted proxies, trust all
+		router.Use(middleware.RealIPMiddleware([]string{"0.0.0.0/0", "::/0"}, cfg.Server.RealIPHeader))
+		log.Infof("Using custom real IP header: %s", cfg.Server.RealIPHeader)
 	}
 
 	router.Use(middleware.RecoveryMiddleware(log))

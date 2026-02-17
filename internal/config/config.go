@@ -24,6 +24,7 @@ type ServerConfig struct {
 	DNSPaths       []DNSPath    `yaml:"dns_paths"`
 	RateLimit      RateLimitCfg `yaml:"rate_limit"`
 	TrustedProxies []string     `yaml:"trusted_proxies"` // Trusted proxy IP ranges for real IP extraction
+	RealIPHeader   string       `yaml:"real_ip_header"`  // Custom header for real client IP (e.g., "CF-Connecting-IP")
 }
 
 // TLSConfig TLS 配置
