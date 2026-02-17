@@ -39,42 +39,48 @@ func (h *DoHHandler) Handle(c *gin.Context) {
 
 	var query []byte
 	var err error
+	var queryName, queryTypeStr string
 
 	// 根据请求方法解析查询
 	switch c.Request.Method {
 	case http.MethodPost:
 		query, err = h.parsePostRequest(c)
 	case http.MethodGet:
-		query, err = h.parseGetRequest(c)
+		query, queryName, queryTypeStr, err = h.parseGetRequestWithInfo(c)
 	default:
 		c.JSON(http.StatusMethodNotAllowed, gin.H{"error": "method not allowed"})
 		return
 	}
 
 	if err != nil {
-		h.handleError(c, err, start)
+		h.handleError(c, err, start, queryName, queryTypeStr)
 		return
 	}
 
 	// 验证查询大小
 	if len(query) == 0 {
-		h.handleError(c, ErrQueryEmpty, start)
+		h.handleError(c, ErrQueryEmpty, start, queryName, queryTypeStr)
 		return
 	}
 
 	if len(query) > h.maxQuerySize {
-		h.handleError(c, ErrQueryTooLarge, start)
+		h.handleError(c, ErrQueryTooLarge, start, queryName, queryTypeStr)
 		return
 	}
 
-	// 提取查询信息
-	queryName, _ := dns.ExtractQueryName(query)
+	// 提取查询信息（如果还没有）
+	if queryName == "" {
+		queryName, _ = dns.ExtractQueryName(query)
+	}
 	queryType, _ := dns.ExtractQueryType(query)
+	if queryTypeStr == "" {
+		queryTypeStr = dns.TypeToString(queryType)
+	}
 
 	// 选择上游解析器
 	resolver, err := h.selector.Select(c.Request.Context())
 	if err != nil {
-		h.handleError(c, err, start)
+		h.handleError(c, err, start, queryName, queryTypeStr)
 		return
 	}
 
@@ -85,11 +91,13 @@ func (h *DoHHandler) Handle(c *gin.Context) {
 	response, err := resolver.Resolve(ctx, query)
 	if err != nil {
 		h.selector.ReportFailure(resolver)
-		h.handleError(c, err, start)
+		h.handleError(c, err, start, queryName, queryTypeStr)
 		return
 	}
 
-	h.selector.ReportSuccess(resolver)
+	// 报告成功并记录延迟
+	latency := time.Since(start)
+	h.selector.ReportSuccessWithLatency(resolver, latency)
 
 	// 解析响应获取响应码
 	rcode := 0
@@ -98,8 +106,7 @@ func (h *DoHHandler) Handle(c *gin.Context) {
 	}
 
 	// 记录日志
-	latency := time.Since(start).Milliseconds()
-	h.logRequest(c, queryName, dns.TypeToString(queryType), resolver, dns.RcodeToString(rcode), latency, http.StatusOK)
+	h.logRequest(c, queryName, queryTypeStr, resolver, dns.RcodeToString(rcode), latency.Milliseconds(), http.StatusOK)
 
 	// 根据客户端 Accept 返回相应格式
 	accept := c.GetHeader("Accept")
@@ -130,21 +137,28 @@ func (h *DoHHandler) parsePostRequest(c *gin.Context) ([]byte, error) {
 
 // parseGetRequest 解析 GET 请求
 func (h *DoHHandler) parseGetRequest(c *gin.Context) ([]byte, error) {
+	query, _, _, err := h.parseGetRequestWithInfo(c)
+	return query, err
+}
+
+// parseGetRequestWithInfo 解析 GET 请求并返回查询信息
+func (h *DoHHandler) parseGetRequestWithInfo(c *gin.Context) ([]byte, string, string, error) {
 	// 检查是否是 Wire Format 参数
 	dnsParam := c.Query("dns")
 	if dnsParam != "" {
 		// Wire Format GET 请求
 		query, err := dns.DecodeBase64URL(dnsParam)
 		if err != nil {
-			return nil, ErrInvalidBase64
+			return nil, "", "", ErrInvalidBase64
 		}
-		return query, nil
+		// Wire format 需要后续解析名称和类型
+		return query, "", "", nil
 	}
 
 	// JSON Format GET 请求
 	name := c.Query("name")
 	if name == "" {
-		return nil, ErrNameRequired
+		return nil, "", "", ErrNameRequired
 	}
 
 	// 获取查询类型
@@ -152,15 +166,20 @@ func (h *DoHHandler) parseGetRequest(c *gin.Context) ([]byte, error) {
 	qtype := dns.StringToType(qtypeStr)
 	if qtype == 0 {
 		qtype = dns.TypeA
+		qtypeStr = "A"
 	}
+
+	// 获取 DNSSEC 相关参数
+	cd := c.Query("cd") == "true" || c.Query("cd") == "1"
+	do := c.Query("do") == "true" || c.Query("do") == "1"
 
 	// 构建 DNS 查询
-	query, err := dns.BuildQuery(name, qtype)
+	query, err := dns.BuildQueryWithOptions(name, qtype, cd, do)
 	if err != nil {
-		return nil, err
+		return nil, "", "", err
 	}
 
-	return query, nil
+	return query, name + ".", qtypeStr, nil
 }
 
 // handleJSONResponse 处理 JSON 响应
@@ -175,7 +194,7 @@ func (h *DoHHandler) handleJSONResponse(c *gin.Context, response []byte, start t
 }
 
 // handleError 处理错误
-func (h *DoHHandler) handleError(c *gin.Context, err error, start time.Time) {
+func (h *DoHHandler) handleError(c *gin.Context, err error, start time.Time, queryName, queryType string) {
 	var status int
 	var errMsg string
 
@@ -207,15 +226,6 @@ func (h *DoHHandler) handleError(c *gin.Context, err error, start time.Time) {
 	default:
 		status = http.StatusInternalServerError
 		errMsg = err.Error()
-	}
-
-	// 尝试提取查询信息用于日志
-	queryName := ""
-	queryType := ""
-	if query, e := h.parseGetRequest(c); e == nil {
-		queryName, _ = dns.ExtractQueryName(query)
-		qtype, _ := dns.ExtractQueryType(query)
-		queryType = dns.TypeToString(qtype)
 	}
 
 	latency := time.Since(start).Milliseconds()

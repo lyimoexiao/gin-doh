@@ -3,6 +3,7 @@ package strategy
 import (
 	"context"
 	"sync/atomic"
+	"time"
 
 	"github.com/lyimoexiao/gin-doh/internal/upstream"
 )
@@ -35,6 +36,9 @@ func (s *RoundRobinSelector) Select(ctx context.Context) (upstream.Resolver, err
 
 // ReportSuccess 报告成功（轮询策略不需要）
 func (s *RoundRobinSelector) ReportSuccess(resolver upstream.Resolver) {}
+
+// ReportSuccessWithLatency 报告成功并记录延迟（轮询策略不需要）
+func (s *RoundRobinSelector) ReportSuccessWithLatency(resolver upstream.Resolver, latency time.Duration) {}
 
 // ReportFailure 报告失败（轮询策略不需要）
 func (s *RoundRobinSelector) ReportFailure(resolver upstream.Resolver) {}

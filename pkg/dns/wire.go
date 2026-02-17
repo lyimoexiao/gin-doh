@@ -1070,15 +1070,39 @@ func ExtractQueryType(data []byte) (uint16, error) {
 
 // BuildQuery 构建 DNS 查询消息
 func BuildQuery(name string, qtype uint16) ([]byte, error) {
+	return BuildQueryWithOptions(name, qtype, false, false)
+}
+
+// QueryOptions DNS 查询选项
+type QueryOptions struct {
+	CD bool // 禁用 DNSSEC 验证 (Checking Disabled)
+	DO bool // 包含 DNSSEC 记录 (DNSSEC OK)
+}
+
+// BuildQueryWithOptions 构建 DNS 查询消息（支持选项）
+func BuildQueryWithOptions(name string, qtype uint16, cd, do bool) ([]byte, error) {
 	var buf []byte
 
 	// Header (12 bytes)
 	buf = append(buf, 0x00, 0x01) // ID
-	buf = append(buf, 0x01, 0x00) // Flags: Recursion Desired
+
+	// Flags
+	flags := uint16(0x0100) // Recursion Desired
+	if cd {
+		flags |= 0x0010 // Checking Disabled
+	}
+	buf = append(buf, byte(flags>>8), byte(flags))
+
 	buf = append(buf, 0x00, 0x01) // QDCOUNT
 	buf = append(buf, 0x00, 0x00) // ANCOUNT
 	buf = append(buf, 0x00, 0x00) // NSCOUNT
-	buf = append(buf, 0x00, 0x00) // ARCOUNT
+
+	// ARCOUNT - 如果需要 DO 标志，添加 EDNS0 OPT 记录
+	if do {
+		buf = append(buf, 0x00, 0x01) // ARCOUNT = 1
+	} else {
+		buf = append(buf, 0x00, 0x00) // ARCOUNT = 0
+	}
 
 	// Question
 	labels := strings.Split(strings.TrimSuffix(name, "."), ".")
@@ -1095,6 +1119,22 @@ func BuildQuery(name string, qtype uint16) ([]byte, error) {
 	buf = append(buf, byte(qtype>>8), byte(qtype))
 	// Class (IN = 1)
 	buf = append(buf, 0x00, 0x01)
+
+	// EDNS0 OPT 记录（如果需要 DO 标志）
+	if do {
+		// OPT 记录名称 (root)
+		buf = append(buf, 0x00)
+		// Type (OPT = 41)
+		buf = append(buf, 0x00, 0x29)
+		// UDP payload size (4096)
+		buf = append(buf, 0x10, 0x00)
+		// Extended RCODE and EDNS0 version (0)
+		buf = append(buf, 0x00, 0x00)
+		// Z field with DO bit set (0x8000)
+		buf = append(buf, 0x80, 0x00)
+		// RDATA length (0)
+		buf = append(buf, 0x00, 0x00)
+	}
 
 	return buf, nil
 }

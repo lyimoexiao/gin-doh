@@ -2,6 +2,7 @@ package strategy
 
 import (
 	"context"
+	"time"
 
 	"github.com/lyimoexiao/gin-doh/internal/upstream"
 )
@@ -13,6 +14,9 @@ type Selector interface {
 
 	// ReportSuccess 报告成功
 	ReportSuccess(resolver upstream.Resolver)
+
+	// ReportSuccessWithLatency 报告成功并记录延迟
+	ReportSuccessWithLatency(resolver upstream.Resolver, latency time.Duration)
 
 	// ReportFailure 报告失败
 	ReportFailure(resolver upstream.Resolver)

@@ -3,6 +3,7 @@ package proxy
 import (
 	"context"
 	"crypto/tls"
+	"encoding/base64"
 	"fmt"
 	"net"
 	"net/url"
@@ -132,7 +133,7 @@ func (d *httpProxyDialer) DialContext(ctx context.Context, network, addr string)
 // basicAuth 生成 Basic 认证字符串
 func basicAuth(username, password string) string {
 	auth := username + ":" + password
-	return url.QueryEscape(auth)
+	return base64.StdEncoding.EncodeToString([]byte(auth))
 }
 
 // SOCKS5 代理拨号器

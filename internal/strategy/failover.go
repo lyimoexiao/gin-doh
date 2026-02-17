@@ -109,6 +109,11 @@ func (s *FailoverSelector) ReportSuccess(resolver upstream.Resolver) {
 	}
 }
 
+// ReportSuccessWithLatency 报告成功并记录延迟 (failover 模式与 ReportSuccess 相同)
+func (s *FailoverSelector) ReportSuccessWithLatency(resolver upstream.Resolver, latency time.Duration) {
+	s.ReportSuccess(resolver)
+}
+
 // ReportFailure 报告失败
 func (s *FailoverSelector) ReportFailure(resolver upstream.Resolver) {
 	s.mu.Lock()
