@@ -727,12 +727,8 @@ func BuildQueryWithOpts(name string, qtype uint16, opts QueryOptions) ([]byte, e
 			rdataLen += 4 + len(ecsData) // option code + length + data
 		}
 
-		// OPT record name (root)
-		buf = append(buf, 0x00)
-		// OPT type
-		buf = append(buf, 0x00, 0x29) // Type OPT (41)
-		// UDP payload size
-		buf = append(buf, 0x10, 0x00) // 4096
+		// OPT record: name(root) + type + udp_size + flags + rdata_len
+		buf = append(buf, 0x00, 0x00, 0x29, 0x10, 0x00)
 		// Extended RCODE and flags (DO flag in high bit)
 		if opts.DO {
 			buf = append(buf, 0x00, 0x00, 0x80, 0x00) // DO flag set
@@ -745,11 +741,8 @@ func BuildQueryWithOpts(name string, qtype uint16, opts QueryOptions) ([]byte, e
 		// Add ECS option if provided
 		if opts.ECS != "" {
 			ecsData, _ := parseECS(opts.ECS)
-			// Option code (ECS = 8)
-			buf = append(buf, 0x00, 0x08)
-			// Option length
-			buf = append(buf, byte(len(ecsData)>>8), byte(len(ecsData)))
-			// Option data
+			// Option code + length + data
+			buf = append(buf, 0x00, 0x08, byte(len(ecsData)>>8), byte(len(ecsData)))
 			buf = append(buf, ecsData...)
 		}
 	}
@@ -804,12 +797,8 @@ func parseECS(ecs string) ([]byte, error) {
 
 	// Build ECS option data
 	result := make([]byte, 0, 4+addrLen)
-	// Family (2 bytes, big-endian)
-	result = append(result, byte(family>>8), byte(family))
-	// Source prefix length (1 byte)
-	result = append(result, byte(prefixLen))
-	// Scope prefix length (1 byte) - always 0 for queries
-	result = append(result, 0x00)
+	// Family (2 bytes) + Source prefix length (1 byte) + Scope prefix length (1 byte, always 0)
+	result = append(result, byte(family>>8), byte(family), byte(prefixLen), 0x00)
 	// Address (truncated to prefix bytes)
 	result = append(result, addrBytes[:addrLen]...)
 
@@ -874,12 +863,71 @@ func InjectECS(query []byte, ecs string) ([]byte, error) {
 		return nil, errors.New("query too short")
 	}
 
-	// Parse the query to check for existing EDNS0
-	arcount := int(binary.BigEndian.Uint16(query[10:12]))
+	ecsData, err := parseECS(ecs)
+	if err != nil {
+		return nil, err
+	}
 
-	// Parse question section
+	// Find OPT record in additional section
+	optOffset, err := findOPTRecord(query)
+	if err != nil {
+		return nil, err
+	}
+
+	if optOffset >= 0 {
+		// Modify existing OPT record to add/replace ECS option
+		return injectECSToOPT(query, optOffset, ecsData)
+	}
+
+	// Add new OPT record with ECS
+	return addOPTWithECS(query, ecsData)
+}
+
+// findOPTRecord finds the OPT record offset in the additional section
+// Returns -1 if not found, or the offset if found
+func findOPTRecord(query []byte) (int, error) {
+	arcount := int(binary.BigEndian.Uint16(query[10:12]))
+	if arcount == 0 {
+		return -1, nil
+	}
+
+	// Parse question section to find additional section start
+	offset := skipQuestionSection(query)
+	if offset < 0 {
+		return -1, errors.New("invalid query format")
+	}
+
+	// Search for OPT record in additional section
+	for i := 0; i < arcount; i++ {
+		if offset >= len(query) {
+			break
+		}
+
+		// Check for root name (OPT record starts with 0x00)
+		if query[offset] == 0x00 && offset+3 < len(query) {
+			rrType := binary.BigEndian.Uint16(query[offset+1 : offset+3])
+			if rrType == TypeOPT {
+				return offset, nil
+			}
+		}
+
+		// Skip this record
+		nextOffset, err := skipResourceRecord(query, offset)
+		if err != nil {
+			return -1, err
+		}
+		offset = nextOffset
+	}
+
+	return -1, nil
+}
+
+// skipQuestionSection skips the question section and returns the offset after it
+func skipQuestionSection(query []byte) int {
+	qdcount := int(binary.BigEndian.Uint16(query[4:6]))
 	offset := HeaderSize
-	for i := 0; i < int(binary.BigEndian.Uint16(query[4:6])); i++ {
+
+	for i := 0; i < qdcount; i++ {
 		for offset < len(query) {
 			b := query[offset]
 			if b == 0 {
@@ -890,58 +938,32 @@ func InjectECS(query []byte, ecs string) ([]byte, error) {
 		}
 	}
 
-	// Check if there's already an OPT record in additional section
-	hasOPT := false
-	optOffset := 0
+	return offset
+}
 
-	if arcount > 0 {
-		additionalStart := offset
-		for i := 0; i < arcount; i++ {
-			if additionalStart >= len(query) {
-				break
-			}
-			// Check for root name (OPT record starts with 0x00)
-			if query[additionalStart] == 0x00 {
-				// Check if this is an OPT record (type 41)
-				if additionalStart+3 < len(query) {
-					rrType := binary.BigEndian.Uint16(query[additionalStart+1 : additionalStart+3])
-					if rrType == TypeOPT {
-						hasOPT = true
-						optOffset = additionalStart
-						break
-					}
-				}
-			}
-			// Skip this record
-			// Skip name (root or compressed)
-			if query[additionalStart]&0xC0 == 0xC0 {
-				additionalStart += 2
-			} else {
-				for additionalStart < len(query) && query[additionalStart] != 0 {
-					additionalStart += 1 + int(query[additionalStart])
-				}
-				additionalStart++ // null terminator
-			}
-			// Skip type, class, TTL (4+2+4 = 10) + rdlength + rdata
-			if additionalStart+10 <= len(query) {
-				rdlength := int(binary.BigEndian.Uint16(query[additionalStart+8 : additionalStart+10]))
-				additionalStart += 10 + rdlength
-			}
+// skipResourceRecord skips a resource record and returns the next offset
+func skipResourceRecord(query []byte, offset int) (int, error) {
+	if offset >= len(query) {
+		return -1, errors.New("offset out of bounds")
+	}
+
+	// Skip name (root or compressed)
+	if query[offset]&0xC0 == 0xC0 {
+		offset += 2
+	} else {
+		for offset < len(query) && query[offset] != 0 {
+			offset += 1 + int(query[offset])
 		}
+		offset++ // null terminator
 	}
 
-	ecsData, err := parseECS(ecs)
-	if err != nil {
-		return nil, err
+	// Skip type, class, TTL (10 bytes) + rdlength + rdata
+	if offset+10 > len(query) {
+		return -1, errors.New("invalid resource record")
 	}
 
-	if hasOPT {
-		// Modify existing OPT record to add/replace ECS option
-		return injectECSToOPT(query, optOffset, ecsData)
-	}
-
-	// Add new OPT record with ECS
-	return addOPTWithECS(query, ecsData)
+	rdlength := int(binary.BigEndian.Uint16(query[offset+8 : offset+10]))
+	return offset + 10 + rdlength, nil
 }
 
 // injectECSToOPT injects ECS into existing OPT record
@@ -971,9 +993,8 @@ func injectECSToOPT(query []byte, optOffset int, ecsData []byte) ([]byte, error)
 		if optCode == EDNS0OptionECS {
 			// Found existing ECS, skip it and add new one
 			hasECS = true
-			// Add new ECS option
-			newRdata = append(newRdata, 0x00, 0x08) // ECS option code
-			newRdata = append(newRdata, byte(len(ecsData)>>8), byte(len(ecsData)))
+			// Add new ECS option: code + length + data
+			newRdata = append(newRdata, 0x00, 0x08, byte(len(ecsData)>>8), byte(len(ecsData)))
 			newRdata = append(newRdata, ecsData...)
 			offset += 4 + optLen
 		} else {
@@ -986,9 +1007,8 @@ func injectECSToOPT(query []byte, optOffset int, ecsData []byte) ([]byte, error)
 	if !hasECS {
 		// No existing ECS, add it
 		newRdata = append(newRdata, query[rdataStart:rdataEnd]...)
-		// Add ECS option
-		newRdata = append(newRdata, 0x00, 0x08) // ECS option code
-		newRdata = append(newRdata, byte(len(ecsData)>>8), byte(len(ecsData)))
+		// Add ECS option: code + length + data
+		newRdata = append(newRdata, 0x00, 0x08, byte(len(ecsData)>>8), byte(len(ecsData)))
 		newRdata = append(newRdata, ecsData...)
 	}
 
@@ -1004,28 +1024,16 @@ func injectECSToOPT(query []byte, optOffset int, ecsData []byte) ([]byte, error)
 }
 
 // addOPTWithECS adds new OPT record with ECS to query
-func addOPTWithECS(query []byte, ecsData []byte) ([]byte, error) {
-	// Build OPT RDATA with ECS option
+func addOPTWithECS(query, ecsData []byte) ([]byte, error) {
+	// Build OPT RDATA with ECS option: code + length + data
 	optRdata := make([]byte, 0, 4+len(ecsData))
-	// ECS option code
-	optRdata = append(optRdata, 0x00, 0x08)
-	// ECS option length
-	optRdata = append(optRdata, byte(len(ecsData)>>8), byte(len(ecsData)))
-	// ECS data
+	optRdata = append(optRdata, 0x00, 0x08, byte(len(ecsData)>>8), byte(len(ecsData)))
 	optRdata = append(optRdata, ecsData...)
 
-	// OPT record size: NAME(1) + TYPE(2) + CLASS(2) + TTL(4) + RDLEN(2) + RDATA
+	// OPT record: NAME(1) + TYPE(2) + CLASS(2) + TTL(4) + RDLEN(2) + RDATA
 	optRecord := make([]byte, 0, 11+len(optRdata))
-	// Root name
-	optRecord = append(optRecord, 0x00)
-	// Type OPT (41)
-	optRecord = append(optRecord, 0x00, 0x29)
-	// UDP payload size (4096)
-	optRecord = append(optRecord, 0x10, 0x00)
-	// Extended RCODE and flags
-	optRecord = append(optRecord, 0x00, 0x00, 0x00, 0x00)
-	// RDLEN
-	optRecord = append(optRecord, byte(len(optRdata)>>8), byte(len(optRdata)))
+	// Root name + Type OPT(41) + UDP size(4096) + Extended RCODE/flags + RDLEN
+	optRecord = append(optRecord, 0x00, 0x00, 0x29, 0x10, 0x00, 0x00, 0x00, 0x00, 0x00, byte(len(optRdata)>>8), byte(len(optRdata)))
 	// RDATA
 	optRecord = append(optRecord, optRdata...)
 

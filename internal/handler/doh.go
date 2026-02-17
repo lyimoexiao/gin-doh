@@ -44,11 +44,28 @@ func NewDoHHandler(selector strategy.Selector, log *logger.Logger, maxQuerySize 
 func (h *DoHHandler) Handle(c *gin.Context) {
 	start := time.Now()
 
-	var query []byte
-	var err error
-	var queryName, queryTypeStr string
-	var ecsInjected bool // Track if ECS was auto-injected
+	// Parse and validate request
+	query, queryName, queryTypeStr, ecsInjected, err := h.parseAndValidate(c, start)
+	if err != nil {
+		return
+	}
 
+	// Execute DNS query
+	response, resolver, rcode, latency, err := h.executeQuery(c, query, queryName, ecsInjected)
+	if err != nil {
+		h.handleError(c, err, start, queryName, queryTypeStr)
+		return
+	}
+
+	// Log request
+	h.logRequest(c, queryName, queryTypeStr, resolver, dns.RcodeToString(rcode), latency.Milliseconds(), http.StatusOK)
+
+	// Return response
+	h.sendResponse(c, response)
+}
+
+// parseAndValidate parses and validates the DNS request
+func (h *DoHHandler) parseAndValidate(c *gin.Context, start time.Time) (query []byte, queryName, queryTypeStr string, ecsInjected bool, err error) {
 	// Parse query based on request method
 	switch c.Request.Method {
 	case http.MethodPost:
@@ -57,23 +74,23 @@ func (h *DoHHandler) Handle(c *gin.Context) {
 		query, queryName, queryTypeStr, ecsInjected, err = h.parseGetRequestWithInfo(c)
 	default:
 		c.JSON(http.StatusMethodNotAllowed, gin.H{"error": "method not allowed"})
-		return
+		return nil, "", "", false, ErrMethodNotAllowed
 	}
 
 	if err != nil {
 		h.handleError(c, err, start, queryName, queryTypeStr)
-		return
+		return nil, "", "", false, err
 	}
 
 	// Validate query size
 	if len(query) == 0 {
 		h.handleError(c, ErrQueryEmpty, start, queryName, queryTypeStr)
-		return
+		return nil, "", "", false, ErrQueryEmpty
 	}
 
 	if len(query) > h.maxQuerySize {
 		h.handleError(c, ErrQueryTooLarge, start, queryName, queryTypeStr)
-		return
+		return nil, "", "", false, ErrQueryTooLarge
 	}
 
 	// Extract query info if not already extracted
@@ -85,12 +102,16 @@ func (h *DoHHandler) Handle(c *gin.Context) {
 		queryTypeStr = dns.TypeToString(queryType)
 	}
 
+	return query, queryName, queryTypeStr, ecsInjected, nil
+}
+
+// executeQuery executes the DNS query and returns the response
+func (h *DoHHandler) executeQuery(c *gin.Context, query []byte, _ string, ecsInjected bool) (response []byte, resolver upstream.Resolver, rcode int, latency time.Duration, err error) {
 	// For POST and Wire Format GET, try to inject ECS from client IP
 	if !ecsInjected {
 		clientIP := middleware.GetRealIP(c)
 		ecs := dns.ClientIPToECS(clientIP)
 		if ecs != "" {
-			// Try to inject ECS into the query
 			modifiedQuery, injectErr := dns.InjectECS(query, ecs)
 			if injectErr == nil {
 				query = modifiedQuery
@@ -99,9 +120,8 @@ func (h *DoHHandler) Handle(c *gin.Context) {
 	}
 
 	// Select upstream resolver
-	resolver, err := h.selector.Select(c.Request.Context())
+	resolver, err = h.selector.Select(c.Request.Context())
 	if err != nil {
-		h.handleError(c, err, start, queryName, queryTypeStr)
 		return
 	}
 
@@ -109,35 +129,33 @@ func (h *DoHHandler) Handle(c *gin.Context) {
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 10*time.Second)
 	defer cancel()
 
-	response, err := resolver.Resolve(ctx, query)
+	start := time.Now()
+	response, err = resolver.Resolve(ctx, query)
 	if err != nil {
 		h.selector.ReportFailure(resolver)
-		h.handleError(c, err, start, queryName, queryTypeStr)
 		return
 	}
 
 	// Report success and record latency
-	latency := time.Since(start)
+	latency = time.Since(start)
 	h.selector.ReportSuccessWithLatency(resolver, latency)
 
-	// Parse response to get response code
-	rcode := 0
+	// Parse response code
+	rcode = 0
 	if len(response) >= 4 {
 		rcode = int(response[3] & 0x0F)
 	}
 
-	// Log request
-	h.logRequest(c, queryName, queryTypeStr, resolver, dns.RcodeToString(rcode), latency.Milliseconds(), http.StatusOK)
+	return
+}
 
-	// Return appropriate format based on client Accept header
+// sendResponse sends the DNS response to the client
+func (h *DoHHandler) sendResponse(c *gin.Context, response []byte) {
 	accept := c.GetHeader("Accept")
 	if dns.IsAcceptJSON(accept) && c.Request.Method == http.MethodGet {
-		// Return JSON format
 		h.handleJSONResponse(c, response)
 		return
 	}
-
-	// Return Wire Format
 	c.Data(http.StatusOK, contentTypeDNSMessage, response)
 }
 
@@ -301,6 +319,7 @@ var (
 	ErrUnsupportedContentType = errors.New("unsupported content type")
 	ErrInvalidBase64          = errors.New("invalid base64 encoding")
 	ErrNameRequired           = errors.New("name parameter is required")
+	ErrMethodNotAllowed       = errors.New("method not allowed")
 )
 
 // HandleHealthCheck handles health check endpoint

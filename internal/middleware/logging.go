@@ -178,66 +178,56 @@ func GetRealIP(c *gin.Context) string {
 func extractRealIP(c *gin.Context, customHeader string) string {
 	// Try custom header first if specified
 	if customHeader != "" {
-		customIP := c.GetHeader(customHeader)
-		if customIP != "" {
-			ip := strings.TrimSpace(customIP)
-			if net.ParseIP(ip) != nil {
-				return ip
-			}
-		}
-	}
-
-	// Try X-Forwarded-For first (most common)
-	xff := c.GetHeader("X-Forwarded-For")
-	if xff != "" {
-		// X-Forwarded-For may contain multiple IPs: client, proxy1, proxy2, ...
-		// The first non-trusted IP is the real client
-		ips := strings.Split(xff, ",")
-		for i, ip := range ips {
-			ip = strings.TrimSpace(ip)
-			if ip != "" && net.ParseIP(ip) != nil {
-				// Return the first IP (leftmost = original client)
-				if i == 0 {
-					return ip
-				}
-			}
-		}
-		// If all IPs are valid, return the first one
-		if len(ips) > 0 {
-			ip := strings.TrimSpace(ips[0])
-			if net.ParseIP(ip) != nil {
-				return ip
-			}
-		}
-	}
-
-	// Try X-Real-IP
-	xri := c.GetHeader("X-Real-IP")
-	if xri != "" {
-		ip := strings.TrimSpace(xri)
-		if net.ParseIP(ip) != nil {
+		if ip := extractIPFromHeader(c, customHeader); ip != "" {
 			return ip
 		}
 	}
 
-	// Try X-Client-IP
-	xci := c.GetHeader("X-Client-IP")
-	if xci != "" {
-		ip := strings.TrimSpace(xci)
-		if net.ParseIP(ip) != nil {
+	// Try headers in order of preference
+	headers := []string{"X-Forwarded-For", "X-Real-IP", "X-Client-IP", "True-Client-IP"}
+	for _, header := range headers {
+		if ip := extractIPFromHeader(c, header); ip != "" {
+			// Special handling for X-Forwarded-For
+			if header == "X-Forwarded-For" {
+				return extractFirstIP(ip)
+			}
 			return ip
 		}
 	}
 
-	// Try True-Client-IP (used by some CDNs like Cloudflare)
-	tci := c.GetHeader("True-Client-IP")
-	if tci != "" {
-		ip := strings.TrimSpace(tci)
+	return ""
+}
+
+// extractIPFromHeader extracts and validates IP from a single header
+func extractIPFromHeader(c *gin.Context, header string) string {
+	value := c.GetHeader(header)
+	if value == "" {
+		return ""
+	}
+	ip := strings.TrimSpace(value)
+	if net.ParseIP(ip) != nil {
+		return ip
+	}
+	return ""
+}
+
+// extractFirstIP extracts the first valid IP from a comma-separated list
+func extractFirstIP(ips string) string {
+	parts := strings.Split(ips, ",")
+	for i, part := range parts {
+		ip := strings.TrimSpace(part)
+		if ip != "" && net.ParseIP(ip) != nil {
+			_ = i // return first valid IP
+			return ip
+		}
+	}
+	// Fallback: try first element
+	if len(parts) > 0 {
+		ip := strings.TrimSpace(parts[0])
 		if net.ParseIP(ip) != nil {
 			return ip
 		}
 	}
-
 	return ""
 }
 
