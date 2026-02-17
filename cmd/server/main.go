@@ -23,13 +23,29 @@ import (
 	"github.com/lyimoexiao/gin-doh/internal/upstream"
 )
 
+// Build information (injected via ldflags at build time)
 var (
-	configPath = flag.String("config", "config.yaml", "path to configuration file")
-	version    = "dev"
+	version   = "dev"
+	gitCommit = "unknown"
+	buildTime = "unknown"
+	goVersion = "unknown"
 )
+
+var configPath = flag.String("config", "config.yaml", "path to configuration file")
+
+func printVersion() {
+	fmt.Printf("gin-doh %s\n", version)
+	fmt.Printf("  Git commit: %s\n", gitCommit)
+	fmt.Printf("  Build time: %s\n", buildTime)
+	fmt.Printf("  Go version: %s\n", goVersion)
+}
 
 func main() {
 	flag.Parse()
+
+	// Print version and build info
+	printVersion()
+	fmt.Println()
 
 	// Load configuration
 	cfg, err := config.Load(*configPath)
