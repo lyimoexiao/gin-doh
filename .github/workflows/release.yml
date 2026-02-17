@@ -1,0 +1,139 @@
+name: Build and Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Release version (e.g., v1.0.0)'
+        required: true
+        type: string
+      prerelease:
+        description: 'Pre-release'
+        required: false
+        default: false
+        type: boolean
+      draft:
+        description: 'Draft release'
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build binaries
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        goos: [linux, darwin, windows]
+        goarch: [amd64, arm64]
+        exclude:
+          - goos: windows
+            goarch: arm64
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+          cache: true
+
+      - name: Get dependencies
+        run: go mod download
+
+      - name: Build
+        id: build
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: 0
+        run: |
+          VERSION=${{ inputs.version }}
+          GIT_COMMIT=$(git rev-parse --short HEAD)
+          BUILD_TIME=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+          GO_VERSION=$(go version | awk '{print $3}')
+          
+          LDFLAGS="-X main.version=${VERSION} \
+            -X main.gitCommit=${GIT_COMMIT} \
+            -X main.buildTime=${BUILD_TIME} \
+            -X main.goVersion=${GO_VERSION}"
+          
+          if [ "${{ matrix.goos }}" = "windows" ]; then
+            BINARY="gin-doh-${{ matrix.goos }}-${{ matrix.goarch }}.exe"
+          else
+            BINARY="gin-doh-${{ matrix.goos }}-${{ matrix.goarch }}"
+          fi
+          
+          go build -ldflags "${LDFLAGS}" -o "${BINARY}" ./cmd/server
+          
+          # Create archive
+          if [ "${{ matrix.goos }}" = "windows" ]; then
+            zip "${BINARY%.exe}.zip" "${BINARY}"
+            echo "artifact=${BINARY%.exe}.zip" >> $GITHUB_OUTPUT
+          else
+            tar -czvf "${BINARY}.tar.gz" "${BINARY}"
+            echo "artifact=${BINARY}.tar.gz" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: gin-doh-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: ${{ steps.build.outputs.artifact }}
+          retention-days: 1
+
+  release:
+    name: Create Release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          pattern: gin-doh-*
+          merge-multiple: true
+
+      - name: Display structure of downloaded files
+        run: ls -la dist/
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ inputs.version }}
+          name: Release ${{ inputs.version }}
+          body: |
+            ## gin-doh ${{ inputs.version }}
+            
+            ### Downloads
+            
+            | Platform | Architecture | File |
+            |----------|--------------|------|
+            | Linux | amd64 | `gin-doh-linux-amd64.tar.gz` |
+            | Linux | arm64 | `gin-doh-linux-arm64.tar.gz` |
+            | macOS | amd64 | `gin-doh-darwin-amd64.tar.gz` |
+            | macOS | arm64 | `gin-doh-darwin-arm64.tar.gz` |
+            | Windows | amd64 | `gin-doh-windows-amd64.zip` |
+            
+            ### Usage
+            
+            ```bash
+            # Linux/macOS
+            tar -xzf gin-doh-<os>-<arch>.tar.gz
+            ./gin-doh -config config.yaml
+            
+            # Windows
+            unzip gin-doh-windows-amd64.zip
+            ./gin-doh.exe -config config.yaml
+            ```
+          files: dist/*
+          draft: ${{ inputs.draft }}
+          prerelease: ${{ inputs.prerelease }}
+          generate_release_notes: true
