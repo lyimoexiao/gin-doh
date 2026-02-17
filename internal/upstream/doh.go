@@ -151,10 +151,15 @@ func (r *DoHResolver) ResolveGET(ctx context.Context, query []byte) ([]byte, err
 
 // String returns server description
 func (r *DoHResolver) String() string {
-	if r.echUsed {
-		return "doh+ech://" + r.url
+	// Remove https:// prefix from URL for cleaner display
+	url := r.url
+	if len(url) > 8 && url[:8] == "https://" {
+		url = url[8:]
 	}
-	return "doh://" + r.url
+	if r.echUsed {
+		return "doh+ech://" + url
+	}
+	return "doh://" + url
 }
 
 // ECHUsed returns whether ECH is used
