@@ -37,6 +37,69 @@ A high-performance DNS-over-HTTPS (DoH) server implementation based on [Gin](htt
 
 ## Installation
 
+### Docker
+
+The recommended way to run gin-doh is using Docker:
+
+```bash
+# Pull from registry (if published)
+docker pull ghcr.io/lyimoexiao/gin-doh:latest
+
+# Or build from source
+docker build -t gin-doh:latest .
+```
+
+**Run with Docker:**
+
+```bash
+# Basic run with default config
+docker run -d --name gin-doh \
+  -p 8080:8080 \
+  gin-doh:latest
+
+# With custom configuration
+docker run -d --name gin-doh \
+  -p 8080:8080 \
+  -v /path/to/config.yaml:/app/config.yaml \
+  gin-doh:latest
+
+# With TLS certificates
+docker run -d --name gin-doh \
+  -p 443:443 \
+  -v /path/to/config.yaml:/app/config.yaml \
+  -v /path/to/certs:/certs:ro \
+  gin-doh:latest
+```
+
+**Docker Compose:**
+
+```yaml
+version: '3.8'
+services:
+  gin-doh:
+    image: gin-doh:latest
+    container_name: gin-doh
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+      - "443:443"
+    volumes:
+      - ./config.yaml:/app/config.yaml:ro
+      - ./certs:/certs:ro
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
+```
+
+**Image Details:**
+- Base: Alpine Linux 3.19
+- Size: ~51MB
+- Runs as non-root user
+- Includes health check
+
 ### Build from Source
 
 ```bash

@@ -1,0 +1,30 @@
+# Build artifacts
+gin-doh
+gin-doh-*
+
+# Git
+.git
+.gitignore
+
+# IDE
+.vscode
+.idea
+*.swp
+*.swo
+
+# Test files
+*_test.go
+testdata/
+
+# Documentation
+*.md
+docs/
+
+# CI/CD
+.github/
+Makefile
+
+# Development files
+.env
+.env.*
+*.log
