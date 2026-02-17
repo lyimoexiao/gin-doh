@@ -11,20 +11,18 @@ import (
 	"time"
 )
 
-// HPKE 实现 (简化版，用于 ECH)
-
-// HPKESender HPKE 发送者
+// HPKESender represents an HPKE sender for ECH encryption
 type HPKESender struct {
 	publicKey  *ecdh.PublicKey
 	privateKey *ecdh.PrivateKey
 }
 
-// HPKEReceiver HPKE 接收者
+// HPKEReceiver represents an HPKE receiver for ECH decryption
 type HPKEReceiver struct {
 	privateKey *ecdh.PrivateKey
 }
 
-// NewHPKESender 创建 HPKE 发送者
+// NewHPKESender creates a new HPKE sender
 func NewHPKESender() (*HPKESender, error) {
 	privateKey, err := ecdh.X25519().GenerateKey(rand.Reader)
 	if err != nil {
@@ -37,32 +35,30 @@ func NewHPKESender() (*HPKESender, error) {
 	}, nil
 }
 
-// NewHPKEReceiver 创建 HPKE 接收者
+// NewHPKEReceiver creates a new HPKE receiver
 func NewHPKEReceiver(privateKey *ecdh.PrivateKey) *HPKEReceiver {
 	return &HPKEReceiver{
 		privateKey: privateKey,
 	}
 }
 
-// Seal 加密数据 (简化实现)
+// Seal encrypts data (simplified implementation)
 func (s *HPKESender) Seal(recipientPublicKey *ecdh.PublicKey, plaintext, associatedData []byte) ([]byte, error) {
-	// 执行 X25519 密钥交换
+	// Perform X25519 key exchange
 	sharedSecret, err := s.privateKey.ECDH(recipientPublicKey)
 	if err != nil {
 		return nil, fmt.Errorf("ECDH failed: %w", err)
 	}
 
-	// 简化的加密实现
-	// 实际实现应该使用完整的 HPKE 规范
-	// 这里只是示意
-
+	// Simplified encryption implementation
+	// Actual implementation should use full HPKE specification
 	_ = sharedSecret
 	_ = associatedData
 
-	// 生成封装密钥
+	// Generate encapsulation key
 	enc := s.publicKey.Bytes()
 
-	// 返回格式: enc (32 bytes) + ciphertext
+	// Return format: enc (32 bytes) + ciphertext
 	result := make([]byte, len(enc)+len(plaintext))
 	copy(result[:len(enc)], enc)
 	copy(result[len(enc):], plaintext)
@@ -70,34 +66,34 @@ func (s *HPKESender) Seal(recipientPublicKey *ecdh.PublicKey, plaintext, associa
 	return result, nil
 }
 
-// Open 解密数据 (简化实现)
+// Open decrypts data (simplified implementation)
 func (r *HPKEReceiver) Open(enc, ciphertext, associatedData []byte) ([]byte, error) {
-	// 解析封装密钥
+	// Parse encapsulation key
 	if len(enc) != 32 {
 		return nil, fmt.Errorf("invalid encapsulated key length")
 	}
 
-	// 从封装密钥重建公钥
+	// Reconstruct public key from encapsulation key
 	senderPublicKey, err := ecdh.X25519().NewPublicKey(enc)
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse sender public key: %w", err)
 	}
 
-	// 执行 X25519 密钥交换
+	// Perform X25519 key exchange
 	sharedSecret, err := r.privateKey.ECDH(senderPublicKey)
 	if err != nil {
 		return nil, fmt.Errorf("ECDH failed: %w", err)
 	}
 
-	// 简化的解密实现
+	// Simplified decryption implementation
 	_ = sharedSecret
 	_ = associatedData
 
-	// 返回明文
+	// Return plaintext
 	return ciphertext, nil
 }
 
-// ClientHelloBuilder 构建 ECH ClientHello
+// ClientHelloBuilder builds an ECH ClientHello
 type ClientHelloBuilder struct {
 	innerHello []byte
 	outerHello []byte
@@ -105,7 +101,7 @@ type ClientHelloBuilder struct {
 	sender     *HPKESender
 }
 
-// NewClientHelloBuilder 创建 ClientHello 构建器
+// NewClientHelloBuilder creates a new ClientHello builder
 func NewClientHelloBuilder(cfg *Config) (*ClientHelloBuilder, error) {
 	sender, err := NewHPKESender()
 	if err != nil {
@@ -118,18 +114,18 @@ func NewClientHelloBuilder(cfg *Config) (*ClientHelloBuilder, error) {
 	}, nil
 }
 
-// SetInnerClientHello 设置内部 ClientHello
+// SetInnerClientHello sets the inner ClientHello
 func (b *ClientHelloBuilder) SetInnerClientHello(hello []byte) {
 	b.innerHello = hello
 }
 
-// Build 构建带有 ECH 的 ClientHello
+// Build builds a ClientHello with ECH
 func (b *ClientHelloBuilder) Build() ([]byte, error) {
 	if b.innerHello == nil {
 		return nil, fmt.Errorf("inner ClientHello not set")
 	}
 
-	// 加密内部 ClientHello
+	// Encrypt inner ClientHello
 	publicKey, err := ecdh.X25519().NewPublicKey(b.config.PublicKey)
 	if err != nil {
 		return nil, fmt.Errorf("invalid public key: %w", err)
@@ -140,80 +136,73 @@ func (b *ClientHelloBuilder) Build() ([]byte, error) {
 		return nil, fmt.Errorf("encryption failed: %w", err)
 	}
 
-	// 构建 ECH 扩展
+	// Build ECH extension
 	echExt := b.buildECHExtension(encrypted)
 
-	// 添加 ECH 扩展到外部 ClientHello
+	// Add ECH extension to outer ClientHello
 	return append(b.outerHello, echExt...), nil
 }
 
-// buildECHExtension 构建 ECH 扩展
+// buildECHExtension builds an ECH extension
 func (b *ClientHelloBuilder) buildECHExtension(encrypted []byte) []byte {
 	var ext []byte
 
-	// 扩展类型 (0xfe0d = 65037)
+	// Extension type (0xfe0d = 65037)
 	ext = binary.BigEndian.AppendUint16(ext, 0xfe0d)
 
-	// ECH 内容
+	// ECH content
 	var content []byte
 
-	// 类型: outer (0)
-	content = append(content, 0x00)
+	// Type: outer (0) + Config ID
+	content = append(content, 0x00, b.config.ConfigID)
 
-	// 配置 ID
-	content = append(content, b.config.ConfigID)
-
-	// 封装密钥长度 (32 for X25519)
+	// Encapsulation key length (32 for X25519) + key
 	encLen := 32
 	content = binary.BigEndian.AppendUint16(content, uint16(encLen))
-
-	// 封装密钥
 	content = append(content, b.sender.publicKey.Bytes()...)
 
-	// 加密的 ClientHello
+	// Encrypted ClientHello
 	content = append(content, encrypted...)
 
-	// 扩展长度
+	// Extension length + content
 	ext = binary.BigEndian.AppendUint16(ext, uint16(len(content)))
-
-	// 扩展内容
 	ext = append(ext, content...)
 
 	return ext
 }
 
-// ECHConn 包装 TLS 连接以支持 ECH
-type ECHConn struct {
-	conn       net.Conn
-	tlsConn    *tls.Conn
-	config     *ClientECHConfig
-	echUsed    bool
+// Conn wraps a TLS connection with ECH support
+type Conn struct {
+	conn        net.Conn
+	tlsConn     *tls.Conn
+	config      *ClientECHConfig
+	echUsed     bool
 	echAccepted bool
 }
 
-// NewECHConn 创建 ECH 连接
-func NewECHConn(conn net.Conn, config *ClientECHConfig) *ECHConn {
-	return &ECHConn{
+// NewECHConn creates a new ECH connection
+func NewECHConn(conn net.Conn, config *ClientECHConfig) *Conn {
+	return &Conn{
 		conn:   conn,
 		config: config,
 	}
 }
 
-// DialWithContext 使用 ECH 拨号连接
-func DialWithContext(ctx context.Context, network, addr string, config *tls.Config, echConfig *ClientECHConfig) (*ECHConn, error) {
-	// 解析地址
+// DialWithContext dials a connection with ECH
+func DialWithContext(ctx context.Context, network, addr string, config *tls.Config, echConfig *ClientECHConfig) (*Conn, error) {
+	// Parse address
 	host, _, err := net.SplitHostPort(addr)
 	if err != nil {
 		return nil, err
 	}
 
-	// 解析主机名
+	// Parse hostname
 	hostname := host
 	if hostname == "" {
 		hostname = addr
 	}
 
-	// 设置 TLS 配置
+	// Set TLS config
 	tlsConfig := config
 	if tlsConfig == nil {
 		tlsConfig = &tls.Config{
@@ -222,17 +211,17 @@ func DialWithContext(ctx context.Context, network, addr string, config *tls.Conf
 	}
 	tlsConfig.ServerName = hostname
 
-	// 应用 ECH 配置
+	// Apply ECH config
 	if echConfig != nil && len(echConfig.ConfigList) > 0 {
 		tlsConfig.EncryptedClientHelloConfigList = echConfig.ConfigList
 	}
 
-	// 创建拨号器
+	// Create dialer
 	dialer := &tls.Dialer{
 		Config: tlsConfig,
 	}
 
-	// 拨号
+	// Dial
 	conn, err := dialer.DialContext(ctx, network, addr)
 	if err != nil {
 		return nil, err
@@ -240,98 +229,98 @@ func DialWithContext(ctx context.Context, network, addr string, config *tls.Conf
 
 	tlsConn, ok := conn.(*tls.Conn)
 	if !ok {
-		conn.Close()
+		_ = conn.Close()
 		return nil, fmt.Errorf("not a TLS connection")
 	}
 
-	// 获取连接状态检查 ECH 是否被接受
+	// Get connection state to check if ECH was accepted
 	state := tlsConn.ConnectionState()
 
-	return &ECHConn{
-		conn:       tlsConn,
-		tlsConn:    tlsConn,
-		config:     echConfig,
-		echUsed:    len(echConfig.ConfigList) > 0,
+	return &Conn{
+		conn:        tlsConn,
+		tlsConn:     tlsConn,
+		config:      echConfig,
+		echUsed:     len(echConfig.ConfigList) > 0,
 		echAccepted: state.ECHAccepted,
 	}, nil
 }
 
-// Read 读取数据
-func (c *ECHConn) Read(b []byte) (int, error) {
+// Read reads data from the connection
+func (c *Conn) Read(b []byte) (int, error) {
 	if c.tlsConn != nil {
 		return c.tlsConn.Read(b)
 	}
 	return c.conn.Read(b)
 }
 
-// Write 写入数据
-func (c *ECHConn) Write(b []byte) (int, error) {
+// Write writes data to the connection
+func (c *Conn) Write(b []byte) (int, error) {
 	if c.tlsConn != nil {
 		return c.tlsConn.Write(b)
 	}
 	return c.conn.Write(b)
 }
 
-// Close 关闭连接
-func (c *ECHConn) Close() error {
+// Close closes the connection
+func (c *Conn) Close() error {
 	if c.tlsConn != nil {
 		return c.tlsConn.Close()
 	}
 	return c.conn.Close()
 }
 
-// LocalAddr 获取本地地址
-func (c *ECHConn) LocalAddr() net.Addr {
+// LocalAddr returns the local address
+func (c *Conn) LocalAddr() net.Addr {
 	if c.tlsConn != nil {
 		return c.tlsConn.LocalAddr()
 	}
 	return c.conn.LocalAddr()
 }
 
-// RemoteAddr 获取远程地址
-func (c *ECHConn) RemoteAddr() net.Addr {
+// RemoteAddr returns the remote address
+func (c *Conn) RemoteAddr() net.Addr {
 	if c.tlsConn != nil {
 		return c.tlsConn.RemoteAddr()
 	}
 	return c.conn.RemoteAddr()
 }
 
-// SetDeadline 设置截止时间
-func (c *ECHConn) SetDeadline(t time.Time) error {
+// SetDeadline sets the deadline
+func (c *Conn) SetDeadline(t time.Time) error {
 	if c.tlsConn != nil {
 		return c.tlsConn.SetDeadline(t)
 	}
 	return c.conn.SetDeadline(t)
 }
 
-// SetReadDeadline 设置读取截止时间
-func (c *ECHConn) SetReadDeadline(t time.Time) error {
+// SetReadDeadline sets the read deadline
+func (c *Conn) SetReadDeadline(t time.Time) error {
 	if c.tlsConn != nil {
 		return c.tlsConn.SetReadDeadline(t)
 	}
 	return c.conn.SetReadDeadline(t)
 }
 
-// SetWriteDeadline 设置写入截止时间
-func (c *ECHConn) SetWriteDeadline(t time.Time) error {
+// SetWriteDeadline sets the write deadline
+func (c *Conn) SetWriteDeadline(t time.Time) error {
 	if c.tlsConn != nil {
 		return c.tlsConn.SetWriteDeadline(t)
 	}
 	return c.conn.SetWriteDeadline(t)
 }
 
-// ECHUsed 返回是否使用了 ECH
-func (c *ECHConn) ECHUsed() bool {
+// ECHUsed returns whether ECH was used
+func (c *Conn) ECHUsed() bool {
 	return c.echUsed
 }
 
-// ECHAccepted 返回 ECH 是否被服务器接受
-func (c *ECHConn) ECHAccepted() bool {
+// ECHAccepted returns whether ECH was accepted by the server
+func (c *Conn) ECHAccepted() bool {
 	return c.echAccepted
 }
 
-// ConnectionState 返回 TLS 连接状态
-func (c *ECHConn) ConnectionState() tls.ConnectionState {
+// ConnectionState returns the TLS connection state
+func (c *Conn) ConnectionState() tls.ConnectionState {
 	if c.tlsConn != nil {
 		return c.tlsConn.ConnectionState()
 	}

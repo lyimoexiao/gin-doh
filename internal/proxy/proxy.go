@@ -1,3 +1,4 @@
+// Package proxy provides HTTP and SOCKS5 proxy support for upstream connections.
 package proxy
 
 import (
@@ -7,22 +8,23 @@ import (
 	"fmt"
 	"net"
 	"net/url"
+	"strconv"
 
 	"github.com/lyimoexiao/gin-doh/internal/config"
 )
 
-// Dialer 代理拨号器接口
+// Dialer is the proxy dialer interface
 type Dialer interface {
 	DialContext(ctx context.Context, network, addr string) (net.Conn, error)
 }
 
-// Manager 代理管理器
+// Manager manages proxy connections
 type Manager struct {
 	config *config.ProxyConfig
 	dialer Dialer
 }
 
-// NewManager 创建代理管理器
+// NewManager creates a new proxy manager
 func NewManager(cfg *config.ProxyConfig) (*Manager, error) {
 	if cfg == nil || !cfg.Enabled {
 		return &Manager{dialer: &net.Dialer{}}, nil
@@ -53,17 +55,17 @@ func NewManager(cfg *config.ProxyConfig) (*Manager, error) {
 	}, nil
 }
 
-// DialContext 通过代理拨号
+// DialContext dials through the proxy
 func (m *Manager) DialContext(ctx context.Context, network, addr string) (net.Conn, error) {
 	return m.dialer.DialContext(ctx, network, addr)
 }
 
-// Enabled 检查代理是否启用
+// Enabled checks if proxy is enabled
 func (m *Manager) Enabled() bool {
 	return m.config != nil && m.config.Enabled
 }
 
-// HTTP 代理拨号器
+// httpProxyDialer is an HTTP proxy dialer
 type httpProxyDialer struct {
 	proxyURL  *url.URL
 	tlsConfig *tls.Config
@@ -89,14 +91,14 @@ func newHTTPProxyDialer(cfg *config.ProxyConfig) (*httpProxyDialer, error) {
 	}, nil
 }
 
-func (d *httpProxyDialer) DialContext(ctx context.Context, network, addr string) (net.Conn, error) {
-	// 连接到代理服务器
+func (d *httpProxyDialer) DialContext(ctx context.Context, _, addr string) (net.Conn, error) {
+	// Connect to proxy server
 	conn, err := d.base.DialContext(ctx, "tcp", d.proxyURL.Host)
 	if err != nil {
 		return nil, err
 	}
 
-	// 发送 CONNECT 请求
+	// Send CONNECT request
 	connectReq := fmt.Sprintf("CONNECT %s HTTP/1.1\r\nHost: %s\r\n", addr, addr)
 
 	if d.proxyURL.User != nil {
@@ -108,35 +110,35 @@ func (d *httpProxyDialer) DialContext(ctx context.Context, network, addr string)
 	connectReq += "\r\n"
 
 	if _, err := conn.Write([]byte(connectReq)); err != nil {
-		conn.Close()
+		_ = conn.Close()
 		return nil, err
 	}
 
-	// 读取响应
+	// Read response
 	buf := make([]byte, 1024)
 	n, err := conn.Read(buf)
 	if err != nil {
-		conn.Close()
+		_ = conn.Close()
 		return nil, err
 	}
 
-	// 检查响应状态
+	// Check response status
 	resp := string(buf[:n])
 	if len(resp) < 12 || resp[9:12] != "200" {
-		conn.Close()
+		_ = conn.Close()
 		return nil, fmt.Errorf("proxy connect failed: %s", resp)
 	}
 
 	return conn, nil
 }
 
-// basicAuth 生成 Basic 认证字符串
+// basicAuth generates a Basic authentication string
 func basicAuth(username, password string) string {
 	auth := username + ":" + password
 	return base64.StdEncoding.EncodeToString([]byte(auth))
 }
 
-// SOCKS5 代理拨号器
+// socks5ProxyDialer is a SOCKS5 proxy dialer
 type socks5ProxyDialer struct {
 	address  string
 	username string
@@ -153,22 +155,22 @@ func newSocks5ProxyDialer(cfg *config.ProxyConfig) (*socks5ProxyDialer, error) {
 	}, nil
 }
 
-func (d *socks5ProxyDialer) DialContext(ctx context.Context, network, addr string) (net.Conn, error) {
-	// 连接到 SOCKS5 代理服务器
+func (d *socks5ProxyDialer) DialContext(ctx context.Context, _, addr string) (net.Conn, error) {
+	// Connect to SOCKS5 proxy server
 	conn, err := d.base.DialContext(ctx, "tcp", d.address)
 	if err != nil {
 		return nil, err
 	}
 
-	// SOCKS5 握手
+	// SOCKS5 handshake
 	if err := d.handshake(conn); err != nil {
-		conn.Close()
+		_ = conn.Close()
 		return nil, err
 	}
 
-	// 发送连接请求
+	// Send connect request
 	if err := d.connect(conn, addr); err != nil {
-		conn.Close()
+		_ = conn.Close()
 		return nil, err
 	}
 
@@ -176,19 +178,19 @@ func (d *socks5ProxyDialer) DialContext(ctx context.Context, network, addr strin
 }
 
 func (d *socks5ProxyDialer) handshake(conn net.Conn) error {
-	// 版本 5，认证方法数量
+	// Version 5, auth method count
 	var authMethods []byte
 	if d.username != "" && d.password != "" {
-		authMethods = []byte{0x05, 0x02, 0x00, 0x02} // 无认证 + 用户名密码
+		authMethods = []byte{0x05, 0x02, 0x00, 0x02} // No auth + username/password
 	} else {
-		authMethods = []byte{0x05, 0x01, 0x00} // 无认证
+		authMethods = []byte{0x05, 0x01, 0x00} // No auth
 	}
 
 	if _, err := conn.Write(authMethods); err != nil {
 		return err
 	}
 
-	// 读取服务器响应
+	// Read server response
 	resp := make([]byte, 2)
 	if _, err := conn.Read(resp); err != nil {
 		return err
@@ -198,11 +200,11 @@ func (d *socks5ProxyDialer) handshake(conn net.Conn) error {
 		return fmt.Errorf("invalid SOCKS version: %d", resp[0])
 	}
 
-	// 处理认证
+	// Handle authentication
 	switch resp[1] {
-	case 0x00: // 无需认证
+	case 0x00: // No authentication required
 		return nil
-	case 0x02: // 用户名密码认证
+	case 0x02: // Username/password authentication
 		return d.authenticate(conn)
 	default:
 		return fmt.Errorf("unsupported auth method: %d", resp[1])
@@ -210,10 +212,9 @@ func (d *socks5ProxyDialer) handshake(conn net.Conn) error {
 }
 
 func (d *socks5ProxyDialer) authenticate(conn net.Conn) error {
-	// 用户名密码认证子协商
+	// Username/password authentication sub-negotiation
 	auth := make([]byte, 0, 3+len(d.username)+len(d.password))
-	auth = append(auth, 0x01) // 版本
-	auth = append(auth, byte(len(d.username)))
+	auth = append(auth, 0x01, byte(len(d.username))) // Version + username length
 	auth = append(auth, []byte(d.username)...)
 	auth = append(auth, byte(len(d.password)))
 	auth = append(auth, []byte(d.password)...)
@@ -240,13 +241,15 @@ func (d *socks5ProxyDialer) connect(conn net.Conn, addr string) error {
 		return err
 	}
 
-	port := 0
-	fmt.Sscanf(portStr, "%d", &port)
+	port, err := strconv.Atoi(portStr)
+	if err != nil {
+		return fmt.Errorf("invalid port: %w", err)
+	}
 
-	// 构建连接请求
-	req := []byte{0x05, 0x01, 0x00} // 版本 5，连接命令，保留
+	// Build connect request
+	req := []byte{0x05, 0x01, 0x00} // Version 5, connect command, reserved
 
-	// 地址类型
+	// Address type
 	ip := net.ParseIP(host)
 	if ip != nil {
 		if ip.To4() != nil {
@@ -260,19 +263,18 @@ func (d *socks5ProxyDialer) connect(conn net.Conn, addr string) error {
 		if len(host) > 255 {
 			return fmt.Errorf("hostname too long")
 		}
-		req = append(req, 0x03) // 域名
-		req = append(req, byte(len(host)))
+		req = append(req, 0x03, byte(len(host))) // Domain name
 		req = append(req, []byte(host)...)
 	}
 
-	// 端口
+	// Port
 	req = append(req, byte(port>>8), byte(port&0xFF))
 
 	if _, err := conn.Write(req); err != nil {
 		return err
 	}
 
-	// 读取响应
+	// Read response
 	resp := make([]byte, 10)
 	n, err := conn.Read(resp)
 	if err != nil {

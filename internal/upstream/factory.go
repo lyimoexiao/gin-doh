@@ -11,31 +11,31 @@ import (
 	"github.com/lyimoexiao/gin-doh/internal/proxy"
 )
 
-// Factory 解析器工厂
+// Factory creates resolvers
 type Factory struct {
 	globalProxy        *proxy.Manager
-	forceEncrypted     bool   // 强制使用加密上游
-	echConfigAvailable bool   // ECH 配置是否可用
+	forceEncrypted     bool
+	echConfigAvailable bool
 }
 
-// FactoryOption 工厂选项
+// FactoryOption is a factory option
 type FactoryOption func(*Factory)
 
-// WithForceEncrypted 设置强制使用加密上游
+// WithForceEncrypted sets force encrypted upstream
 func WithForceEncrypted(force bool) FactoryOption {
 	return func(f *Factory) {
 		f.forceEncrypted = force
 	}
 }
 
-// WithECHAvailable 设置 ECH 配置可用状态
+// WithECHAvailable sets ECH config availability
 func WithECHAvailable(available bool) FactoryOption {
 	return func(f *Factory) {
 		f.echConfigAvailable = available
 	}
 }
 
-// NewFactory 创建解析器工厂
+// NewFactory creates a new resolver factory
 func NewFactory(globalProxy *proxy.Manager, opts ...FactoryOption) *Factory {
 	f := &Factory{
 		globalProxy: globalProxy,
@@ -46,65 +46,85 @@ func NewFactory(globalProxy *proxy.Manager, opts ...FactoryOption) *Factory {
 	return f
 }
 
-// CreateResolver 创建解析器
+// CreateResolver creates a resolver
 func (f *Factory) CreateResolver(cfg *config.UpstreamServer) (Resolver, error) {
 	return f.CreateResolverWithECH(cfg, nil)
 }
 
-// CreateResolverWithECH 创建解析器 (支持 ECH 配置)
+// CreateResolverWithECH creates a resolver with ECH config
 func (f *Factory) CreateResolverWithECH(cfg *config.UpstreamServer, globalECHConfig *ech.ClientECHConfig) (Resolver, error) {
-	// 检查是否强制使用加密上游
-	if f.forceEncrypted || f.echConfigAvailable {
-		if cfg.Protocol == "udp" || cfg.Protocol == "tcp" {
-			return nil, fmt.Errorf("ECH enabled: protocol %s is not allowed, only encrypted protocols (doh, dot) are supported", cfg.Protocol)
-		}
+	// Check if encrypted upstream is required
+	if err := f.validateEncryptedProtocol(cfg); err != nil {
+		return nil, err
 	}
 
-	// 确定使用的代理
-	var proxyMgr *proxy.Manager
-	var err error
-
-	if cfg.Proxy != nil && cfg.Proxy.Enabled {
-		// 使用服务器级代理
-		proxyMgr, err = proxy.NewManager(cfg.Proxy)
-		if err != nil {
-			return nil, err
-		}
-	} else if f.globalProxy != nil && f.globalProxy.Enabled() {
-		// 使用全局代理
-		proxyMgr = f.globalProxy
+	// Setup proxy manager
+	proxyMgr, err := f.setupProxy(cfg)
+	if err != nil {
+		return nil, err
 	}
 
-	// 设置默认超时
+	// Setup timeout
 	timeout := cfg.Timeout
 	if timeout == 0 {
 		timeout = 5 * time.Second
 	}
 
-	// 准备 ECH 配置
-	var echConfig *ech.ClientECHConfig
-	echEnabled := false
+	// Setup ECH config
+	echConfig, echEnabled := f.setupECHConfig(cfg, globalECHConfig)
 
+	// Create resolver based on protocol
+	return f.createResolverByProtocol(cfg, timeout, proxyMgr, echConfig, echEnabled)
+}
+
+// validateEncryptedProtocol validates that the protocol is allowed
+func (f *Factory) validateEncryptedProtocol(cfg *config.UpstreamServer) error {
+	if f.forceEncrypted || f.echConfigAvailable {
+		if cfg.Protocol == "udp" || cfg.Protocol == "tcp" {
+			return fmt.Errorf("ECH enabled: protocol %s is not allowed, only encrypted protocols (doh, dot) are supported", cfg.Protocol)
+		}
+	}
+	return nil
+}
+
+// setupProxy sets up the proxy manager for the resolver
+func (f *Factory) setupProxy(cfg *config.UpstreamServer) (*proxy.Manager, error) {
+	if cfg.Proxy != nil && cfg.Proxy.Enabled {
+		return proxy.NewManager(cfg.Proxy)
+	}
+	if f.globalProxy != nil && f.globalProxy.Enabled() {
+		return f.globalProxy, nil
+	}
+	return nil, nil
+}
+
+// setupECHConfig sets up ECH configuration
+func (f *Factory) setupECHConfig(cfg *config.UpstreamServer, globalECHConfig *ech.ClientECHConfig) (*ech.ClientECHConfig, bool) {
+	// Try server-level ECH config first
 	if cfg.ECH != nil && cfg.ECH.Enabled {
-		// 使用服务器级 ECH 配置
-		echConfig = ech.NewClientECHConfig()
+		echConfig := ech.NewClientECHConfig()
 		if cfg.ECH.ConfigList != "" {
-			// 尝试作为 Base64 加载
+			// Try loading as Base64 first
 			if err := echConfig.LoadConfigListFromBase64(cfg.ECH.ConfigList); err != nil {
-				// 尝试作为文件路径加载
+				// Try loading as file path
 				if err := echConfig.LoadConfigListFromFile(cfg.ECH.ConfigList); err != nil {
-					return nil, fmt.Errorf("failed to load ECH config: %w", err)
+					return nil, false
 				}
 			}
 		}
-		echEnabled = true
-	} else if globalECHConfig != nil && len(globalECHConfig.ConfigList) > 0 {
-		// 使用全局 ECH 配置
-		echConfig = globalECHConfig
-		echEnabled = true
+		return echConfig, true
 	}
 
-	// 根据协议创建解析器
+	// Fall back to global ECH config
+	if globalECHConfig != nil && len(globalECHConfig.ConfigList) > 0 {
+		return globalECHConfig, true
+	}
+
+	return nil, false
+}
+
+// createResolverByProtocol creates a resolver based on protocol type
+func (f *Factory) createResolverByProtocol(cfg *config.UpstreamServer, timeout time.Duration, proxyMgr *proxy.Manager, echConfig *ech.ClientECHConfig, echEnabled bool) (Resolver, error) {
 	switch cfg.Protocol {
 	case "udp":
 		return NewUDPResolver(cfg.Address, timeout), nil
@@ -122,13 +142,13 @@ func (f *Factory) CreateResolverWithECH(cfg *config.UpstreamServer, globalECHCon
 	}
 }
 
-// 错误定义
+// Error definitions
 var (
 	ErrUnsupportedProtocol  = &ProtocolError{}
 	ErrUnencryptedForbidden = errors.New("ECH mode requires encrypted upstream (doh or dot)")
 )
 
-// ProtocolError 协议错误
+// ProtocolError is a protocol error
 type ProtocolError struct {
 	Protocol string
 }
@@ -137,20 +157,20 @@ func (e *ProtocolError) Error() string {
 	return "unsupported protocol: " + e.Protocol
 }
 
-// ResolverWithStats 带统计的解析器
+// ResolverWithStats is a resolver with statistics
 type ResolverWithStats struct {
 	Resolver
 	stats ResolverStats
 }
 
-// NewResolverWithStats 创建带统计的解析器
+// NewResolverWithStats creates a resolver with statistics
 func NewResolverWithStats(resolver Resolver) *ResolverWithStats {
 	return &ResolverWithStats{
 		Resolver: resolver,
 	}
 }
 
-// Resolve 执行 DNS 解析并更新统计
+// Resolve performs DNS resolution and updates statistics
 func (r *ResolverWithStats) Resolve(ctx context.Context, query []byte) ([]byte, error) {
 	start := time.Now()
 	r.stats.TotalRequests++
@@ -169,7 +189,7 @@ func (r *ResolverWithStats) Resolve(ctx context.Context, query []byte) ([]byte, 
 	return resp, nil
 }
 
-// Stats 返回统计信息
+// Stats returns statistics
 func (r *ResolverWithStats) Stats() ResolverStats {
 	return r.stats
 }

@@ -1,3 +1,4 @@
+// Package strategy provides upstream server selection strategies.
 package strategy
 
 import (
@@ -7,7 +8,7 @@ import (
 	"github.com/lyimoexiao/gin-doh/internal/upstream"
 )
 
-// Selector 上游服务器选择策略接口
+// Selector is the upstream server selection strategy interface
 type Selector interface {
 	// Select 选择一个上游服务器
 	Select(ctx context.Context) (upstream.Resolver, error)

@@ -10,7 +10,7 @@ import (
 	"github.com/lyimoexiao/gin-doh/internal/upstream"
 )
 
-// FailoverSelector 主备选择器
+// FailoverSelector is a failover selector
 type FailoverSelector struct {
 	BaseSelector
 	config      *config.HealthCheckConfig
@@ -28,7 +28,7 @@ type resolverStatus struct {
 	lastCheck    time.Time
 }
 
-// NewFailoverSelector 创建主备选择器
+// NewFailoverSelector creates a new failover selector
 func NewFailoverSelector(resolvers []upstream.Resolver, priorities []int, cfg *config.HealthCheckConfig) *FailoverSelector {
 	statuses := make([]*resolverStatus, len(resolvers))
 	for i := range statuses {
@@ -46,7 +46,7 @@ func NewFailoverSelector(resolvers []upstream.Resolver, priorities []int, cfg *c
 		config:     cfg,
 	}
 
-	// 启动健康检查
+	// Start health check
 	if cfg != nil && cfg.Enabled {
 		s.healthCheck = newHealthChecker(s, cfg)
 		go s.healthCheck.Start()
@@ -55,8 +55,8 @@ func NewFailoverSelector(resolvers []upstream.Resolver, priorities []int, cfg *c
 	return s
 }
 
-// Select 选择一个上游服务器（优先级顺序）
-func (s *FailoverSelector) Select(ctx context.Context) (upstream.Resolver, error) {
+// Select selects an upstream server (by priority order)
+func (s *FailoverSelector) Select(_ context.Context) (upstream.Resolver, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -64,29 +64,29 @@ func (s *FailoverSelector) Select(ctx context.Context) (upstream.Resolver, error
 		return nil, ErrNoResolvers
 	}
 
-	// 创建带优先级的索引列表
+	// Create index list with priorities
 	indices := make([]int, len(s.resolvers))
 	for i := range indices {
 		indices[i] = i
 	}
 
-	// 按优先级排序
+	// Sort by priority
 	sort.Slice(indices, func(i, j int) bool {
 		return s.priorities[indices[i]] < s.priorities[indices[j]]
 	})
 
-	// 选择第一个健康的服务器
+	// Select first healthy server
 	for _, idx := range indices {
 		if s.statuses[idx].healthy {
 			return s.resolvers[idx], nil
 		}
 	}
 
-	// 如果所有服务器都不健康，返回第一个（最高优先级）
+	// If all servers are unhealthy, return the first (highest priority)
 	return s.resolvers[indices[0]], nil
 }
 
-// ReportSuccess 报告成功
+// ReportSuccess reports success
 func (s *FailoverSelector) ReportSuccess(resolver upstream.Resolver) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -100,7 +100,7 @@ func (s *FailoverSelector) ReportSuccess(resolver upstream.Resolver) {
 	status.successCount++
 	status.lastCheck = time.Now()
 
-	// 检查是否恢复
+	// Check if recovered
 	if !status.healthy && s.config != nil {
 		if status.successCount >= s.config.RecoveryThreshold {
 			status.healthy = true
@@ -109,12 +109,12 @@ func (s *FailoverSelector) ReportSuccess(resolver upstream.Resolver) {
 	}
 }
 
-// ReportSuccessWithLatency 报告成功并记录延迟 (failover 模式与 ReportSuccess 相同)
-func (s *FailoverSelector) ReportSuccessWithLatency(resolver upstream.Resolver, latency time.Duration) {
+// ReportSuccessWithLatency reports success with latency (failover mode same as ReportSuccess)
+func (s *FailoverSelector) ReportSuccessWithLatency(resolver upstream.Resolver, _ time.Duration) {
 	s.ReportSuccess(resolver)
 }
 
-// ReportFailure 报告失败
+// ReportFailure reports failure
 func (s *FailoverSelector) ReportFailure(resolver upstream.Resolver) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -129,7 +129,7 @@ func (s *FailoverSelector) ReportFailure(resolver upstream.Resolver) {
 	status.successCount = 0
 	status.lastCheck = time.Now()
 
-	// 检查是否标记为不健康
+	// Check if should mark as unhealthy
 	if s.config != nil {
 		if status.failureCount >= s.config.FailureThreshold {
 			status.healthy = false
@@ -137,7 +137,7 @@ func (s *FailoverSelector) ReportFailure(resolver upstream.Resolver) {
 	}
 }
 
-// findResolverIndex 查找解析器索引
+// findResolverIndex finds resolver index
 func (s *FailoverSelector) findResolverIndex(resolver upstream.Resolver) int {
 	for i, r := range s.resolvers {
 		if r == resolver {
@@ -147,7 +147,7 @@ func (s *FailoverSelector) findResolverIndex(resolver upstream.Resolver) int {
 	return -1
 }
 
-// GetStatus 获取解析器状态
+// GetStatus gets resolver status
 func (s *FailoverSelector) GetStatus(idx int) (healthy bool, failureCount int) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -159,14 +159,14 @@ func (s *FailoverSelector) GetStatus(idx int) (healthy bool, failureCount int) {
 	return s.statuses[idx].healthy, s.statuses[idx].failureCount
 }
 
-// Stop 停止健康检查
+// Stop stops health check
 func (s *FailoverSelector) Stop() {
 	if s.healthCheck != nil {
 		s.healthCheck.Stop()
 	}
 }
 
-// healthChecker 健康检查器
+// healthChecker is a health checker
 type healthChecker struct {
 	selector *FailoverSelector
 	config   *config.HealthCheckConfig
@@ -200,6 +200,6 @@ func (h *healthChecker) Stop() {
 }
 
 func (h *healthChecker) check() {
-	// 简单的健康检查逻辑：尝试解析一个已知域名
-	// 实际实现可以更复杂
+	// Simple health check logic: try to resolve a known domain
+	// Actual implementation can be more complex
 }

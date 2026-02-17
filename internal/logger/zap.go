@@ -1,3 +1,4 @@
+// Package logger provides structured logging using Zap.
 package logger
 
 import (
@@ -86,17 +87,17 @@ func (l *Logger) IsFieldEnabled(field string) bool {
 
 // DNSRequestFields DNS 请求日志字段
 type DNSRequestFields struct {
-	Timestamp       string
-	ClientIP        string
-	Method          string
-	Path            string
-	QueryName       string
-	QueryType       string
-	Upstream        string
+	Timestamp        string
+	ClientIP         string
+	Method           string
+	Path             string
+	QueryName        string
+	QueryType        string
+	Upstream         string
 	UpstreamProtocol string
-	ResponseCode    string
-	LatencyMs       int64
-	Status          int
+	ResponseCode     string
+	LatencyMs        int64
+	Status           int
 }
 
 // LogDNSRequest 记录 DNS 请求日志

@@ -1,3 +1,4 @@
+// Package handler provides HTTP request handlers for the DoH server.
 package handler
 
 import (
@@ -14,26 +15,26 @@ import (
 	"github.com/lyimoexiao/gin-doh/pkg/dns"
 )
 
-// DoHHandler DoH 处理器
+// DoHHandler handles DNS-over-HTTPS requests
 type DoHHandler struct {
-	selector      strategy.Selector
-	logger        *logger.Logger
-	maxQuerySize  int
+	selector     strategy.Selector
+	log          *logger.Logger
+	maxQuerySize int
 }
 
-// NewDoHHandler 创建 DoH 处理器
-func NewDoHHandler(selector strategy.Selector, logger *logger.Logger, maxQuerySize int) *DoHHandler {
+// NewDoHHandler creates a new DoH handler
+func NewDoHHandler(selector strategy.Selector, log *logger.Logger, maxQuerySize int) *DoHHandler {
 	if maxQuerySize == 0 {
 		maxQuerySize = 65535
 	}
 	return &DoHHandler{
 		selector:     selector,
-		logger:       logger,
+		log:          log,
 		maxQuerySize: maxQuerySize,
 	}
 }
 
-// Handle 处理 DNS 查询请求
+// Handle handles DNS query requests
 func (h *DoHHandler) Handle(c *gin.Context) {
 	start := time.Now()
 
@@ -41,7 +42,7 @@ func (h *DoHHandler) Handle(c *gin.Context) {
 	var err error
 	var queryName, queryTypeStr string
 
-	// 根据请求方法解析查询
+	// Parse query based on request method
 	switch c.Request.Method {
 	case http.MethodPost:
 		query, err = h.parsePostRequest(c)
@@ -57,7 +58,7 @@ func (h *DoHHandler) Handle(c *gin.Context) {
 		return
 	}
 
-	// 验证查询大小
+	// Validate query size
 	if len(query) == 0 {
 		h.handleError(c, ErrQueryEmpty, start, queryName, queryTypeStr)
 		return
@@ -68,7 +69,7 @@ func (h *DoHHandler) Handle(c *gin.Context) {
 		return
 	}
 
-	// 提取查询信息（如果还没有）
+	// Extract query info if not already extracted
 	if queryName == "" {
 		queryName, _ = dns.ExtractQueryName(query)
 	}
@@ -77,14 +78,14 @@ func (h *DoHHandler) Handle(c *gin.Context) {
 		queryTypeStr = dns.TypeToString(queryType)
 	}
 
-	// 选择上游解析器
+	// Select upstream resolver
 	resolver, err := h.selector.Select(c.Request.Context())
 	if err != nil {
 		h.handleError(c, err, start, queryName, queryTypeStr)
 		return
 	}
 
-	// 执行查询
+	// Execute query
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 10*time.Second)
 	defer cancel()
 
@@ -95,32 +96,32 @@ func (h *DoHHandler) Handle(c *gin.Context) {
 		return
 	}
 
-	// 报告成功并记录延迟
+	// Report success and record latency
 	latency := time.Since(start)
 	h.selector.ReportSuccessWithLatency(resolver, latency)
 
-	// 解析响应获取响应码
+	// Parse response to get response code
 	rcode := 0
 	if len(response) >= 4 {
 		rcode = int(response[3] & 0x0F)
 	}
 
-	// 记录日志
+	// Log request
 	h.logRequest(c, queryName, queryTypeStr, resolver, dns.RcodeToString(rcode), latency.Milliseconds(), http.StatusOK)
 
-	// 根据客户端 Accept 返回相应格式
+	// Return appropriate format based on client Accept header
 	accept := c.GetHeader("Accept")
 	if dns.IsAcceptJSON(accept) && c.Request.Method == http.MethodGet {
-		// 返回 JSON 格式
-		h.handleJSONResponse(c, response, start)
+		// Return JSON format
+		h.handleJSONResponse(c, response)
 		return
 	}
 
-	// 返回 Wire Format
+	// Return Wire Format
 	c.Data(http.StatusOK, "application/dns-message", response)
 }
 
-// parsePostRequest 解析 POST 请求
+// parsePostRequest parses a POST request
 func (h *DoHHandler) parsePostRequest(c *gin.Context) ([]byte, error) {
 	contentType := c.GetHeader("Content-Type")
 	if contentType != "application/dns-message" {
@@ -135,33 +136,27 @@ func (h *DoHHandler) parsePostRequest(c *gin.Context) ([]byte, error) {
 	return body, nil
 }
 
-// parseGetRequest 解析 GET 请求
-func (h *DoHHandler) parseGetRequest(c *gin.Context) ([]byte, error) {
-	query, _, _, err := h.parseGetRequestWithInfo(c)
-	return query, err
-}
-
-// parseGetRequestWithInfo 解析 GET 请求并返回查询信息
-func (h *DoHHandler) parseGetRequestWithInfo(c *gin.Context) ([]byte, string, string, error) {
-	// 检查是否是 Wire Format 参数
+// parseGetRequestWithInfo parses a GET request and returns query info
+func (h *DoHHandler) parseGetRequestWithInfo(c *gin.Context) (query []byte, queryName, queryType string, err error) {
+	// Check if it's a Wire Format parameter
 	dnsParam := c.Query("dns")
 	if dnsParam != "" {
-		// Wire Format GET 请求
-		query, err := dns.DecodeBase64URL(dnsParam)
+		// Wire Format GET request
+		query, err = dns.DecodeBase64URL(dnsParam)
 		if err != nil {
 			return nil, "", "", ErrInvalidBase64
 		}
-		// Wire format 需要后续解析名称和类型
+		// Wire format requires parsing name and type later
 		return query, "", "", nil
 	}
 
-	// JSON Format GET 请求
+	// JSON Format GET request
 	name := c.Query("name")
 	if name == "" {
 		return nil, "", "", ErrNameRequired
 	}
 
-	// 获取查询类型
+	// Get query type
 	qtypeStr := c.DefaultQuery("type", "A")
 	qtype := dns.StringToType(qtypeStr)
 	if qtype == 0 {
@@ -169,12 +164,12 @@ func (h *DoHHandler) parseGetRequestWithInfo(c *gin.Context) ([]byte, string, st
 		qtypeStr = "A"
 	}
 
-	// 获取 DNSSEC 相关参数
+	// Get DNSSEC parameters
 	cd := c.Query("cd") == "true" || c.Query("cd") == "1"
 	do := c.Query("do") == "true" || c.Query("do") == "1"
 
-	// 构建 DNS 查询
-	query, err := dns.BuildQueryWithOptions(name, qtype, cd, do)
+	// Build DNS query
+	query, err = dns.BuildQueryWithOptions(name, qtype, cd, do)
 	if err != nil {
 		return nil, "", "", err
 	}
@@ -182,8 +177,8 @@ func (h *DoHHandler) parseGetRequestWithInfo(c *gin.Context) ([]byte, string, st
 	return query, name + ".", qtypeStr, nil
 }
 
-// handleJSONResponse 处理 JSON 响应
-func (h *DoHHandler) handleJSONResponse(c *gin.Context, response []byte, start time.Time) {
+// handleJSONResponse handles JSON response
+func (h *DoHHandler) handleJSONResponse(c *gin.Context, response []byte) {
 	jsonResp, err := dns.WireToJSON(response)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to parse DNS response"})
@@ -193,7 +188,7 @@ func (h *DoHHandler) handleJSONResponse(c *gin.Context, response []byte, start t
 	c.JSON(http.StatusOK, jsonResp)
 }
 
-// handleError 处理错误
+// handleError handles errors
 func (h *DoHHandler) handleError(c *gin.Context, err error, start time.Time, queryName, queryType string) {
 	var status int
 	var errMsg string
@@ -234,7 +229,7 @@ func (h *DoHHandler) handleError(c *gin.Context, err error, start time.Time, que
 	c.JSON(status, gin.H{"error": errMsg})
 }
 
-// logRequest 记录请求日志
+// logRequest logs request information
 func (h *DoHHandler) logRequest(c *gin.Context, queryName, queryType string, resolver upstream.Resolver, rcode string, latency int64, status int) {
 	upstreamAddr := ""
 	upstreamProtocol := ""
@@ -244,7 +239,7 @@ func (h *DoHHandler) logRequest(c *gin.Context, queryName, queryType string, res
 		upstreamProtocol = resolver.Protocol()
 	}
 
-	h.logger.LogDNSRequest(&logger.DNSRequestFields{
+	h.log.LogDNSRequest(&logger.DNSRequestFields{
 		Timestamp:        dns.CurrentTimestamp(),
 		ClientIP:         c.ClientIP(),
 		Method:           c.Request.Method,
@@ -259,16 +254,16 @@ func (h *DoHHandler) logRequest(c *gin.Context, queryName, queryType string, res
 	})
 }
 
-// 错误定义
+// Error definitions
 var (
-	ErrQueryEmpty            = errors.New("dns query is empty")
-	ErrQueryTooLarge         = errors.New("dns query is too large")
+	ErrQueryEmpty             = errors.New("dns query is empty")
+	ErrQueryTooLarge          = errors.New("dns query is too large")
 	ErrUnsupportedContentType = errors.New("unsupported content type")
-	ErrInvalidBase64         = errors.New("invalid base64 encoding")
-	ErrNameRequired          = errors.New("name parameter is required")
+	ErrInvalidBase64          = errors.New("invalid base64 encoding")
+	ErrNameRequired           = errors.New("name parameter is required")
 )
 
-// HandleHealthCheck 健康检查端点
+// HandleHealthCheck handles health check endpoint
 func (h *DoHHandler) HandleHealthCheck(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"status": "ok"})
 }

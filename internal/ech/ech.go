@@ -1,3 +1,5 @@
+// Package ech provides ECH (Encrypted Client Hello) configuration management
+// for both server-side and client-side ECH support.
 package ech
 
 import (
@@ -12,24 +14,24 @@ import (
 	"os"
 )
 
-// ECH 相关常量
+// ECH related constants
 const (
-	// ECH 配置版本
+	// ECHConfigVersion is the ECH configuration version
 	ECHConfigVersion = 0xfe0d
 
-	// HPKE KEM 标识符
+	// HPKE KEM identifiers
 	HPKEDHKEMX25519 uint16 = 0x0020
 
-	// HPKE KDF 标识符
+	// HPKE KDF identifiers
 	HPKEHKDFSHA256 uint16 = 0x0001
 
-	// HPKE AEAD 标识符
-	HPKEAES128GCM       uint16 = 0x0001
-	HPKEAES256GCM       uint16 = 0x0002
+	// HPKE AEAD identifiers
+	HPKEAES128GCM        uint16 = 0x0001
+	HPKEAES256GCM        uint16 = 0x0002
 	HPKEChaCha20Poly1305 uint16 = 0x0003
 )
 
-// Config ECH 配置结构 (用于服务端和客户端)
+// Config represents an ECH configuration (for server and client)
 type Config struct {
 	Version           uint8
 	ConfigID          uint8
@@ -41,32 +43,36 @@ type Config struct {
 	MaximumNameLength uint8
 }
 
-// ConfigList ECH 配置列表
+// ConfigList represents an ECH configuration list
 type ConfigList struct {
 	Configs []Config
 }
 
-// Key ECH 密钥对
+// Key represents an ECH key pair
 type Key struct {
-	ConfigID  uint8
-	PublicKey *ecdh.PublicKey
+	ConfigID   uint8
+	PublicKey  *ecdh.PublicKey
 	PrivateKey *ecdh.PrivateKey
 }
 
 var (
-	ErrInvalidECHConfig     = errors.New("invalid ECH config")
+	// ErrInvalidECHConfig indicates an invalid ECH configuration
+	ErrInvalidECHConfig = errors.New("invalid ECH config")
+	// ErrInvalidECHConfigList indicates an invalid ECH configuration list
 	ErrInvalidECHConfigList = errors.New("invalid ECH config list")
-	ErrUnsupportedKEM       = errors.New("unsupported KEM algorithm")
-	ErrInvalidKeyFormat     = errors.New("invalid key format")
+	// ErrUnsupportedKEM indicates an unsupported KEM algorithm
+	ErrUnsupportedKEM = errors.New("unsupported KEM algorithm")
+	// ErrInvalidKeyFormat indicates an invalid key format
+	ErrInvalidKeyFormat = errors.New("invalid key format")
 )
 
-// ParseConfigList 解析 ECH 配置列表
+// ParseConfigList parses an ECH configuration list
 func ParseConfigList(data []byte) (*ConfigList, error) {
 	if len(data) < 2 {
 		return nil, ErrInvalidECHConfigList
 	}
 
-	// 读取配置列表长度
+	// Read config list length
 	listLen := binary.BigEndian.Uint16(data[0:2])
 	if len(data) < int(listLen)+2 {
 		return nil, ErrInvalidECHConfigList
@@ -81,7 +87,7 @@ func ParseConfigList(data []byte) (*ConfigList, error) {
 			return nil, ErrInvalidECHConfigList
 		}
 
-		// 读取配置长度
+		// Read config length
 		configLen := int(binary.BigEndian.Uint16(data[offset+2 : offset+4]))
 		if configLen+4 > remaining {
 			return nil, ErrInvalidECHConfigList
@@ -100,7 +106,7 @@ func ParseConfigList(data []byte) (*ConfigList, error) {
 	return list, nil
 }
 
-// parseConfig 解析单个 ECH 配置
+// parseConfig parses a single ECH configuration
 func parseConfig(data []byte) (*Config, error) {
 	if len(data) < 10 {
 		return nil, ErrInvalidECHConfig
@@ -108,15 +114,15 @@ func parseConfig(data []byte) (*Config, error) {
 
 	offset := 0
 
-	// 读取配置类型长度 (2 bytes)
+	// Read config type length (2 bytes)
 	configTypeLen := int(binary.BigEndian.Uint16(data[offset : offset+2]))
 	offset += 2
 
-	// 读取配置长度 (2 bytes)
+	// Read config length (2 bytes)
 	configLen := int(binary.BigEndian.Uint16(data[offset : offset+2]))
 	offset += 2
 
-	_ = configTypeLen // 忽略配置类型长度
+	_ = configTypeLen // Ignore config type length
 
 	if offset+configLen > len(data) {
 		return nil, ErrInvalidECHConfig
@@ -131,7 +137,7 @@ func parseConfig(data []byte) (*Config, error) {
 	return cfg, nil
 }
 
-// parseConfigInner 解析 ECH 配置内部结构
+// parseConfigInner parses the inner structure of an ECH configuration
 func parseConfigInner(data []byte) (*Config, error) {
 	if len(data) < 8 {
 		return nil, ErrInvalidECHConfig
@@ -140,11 +146,11 @@ func parseConfigInner(data []byte) (*Config, error) {
 	offset := 0
 	cfg := &Config{}
 
-	// 版本 (2 bytes)
+	// Version (2 bytes)
 	cfg.Version = data[offset]
-	offset += 2 // 跳过版本 (uint16)
+	offset += 2 // Skip version (uint16)
 
-	// 配置 ID (1 byte)
+	// Config ID (1 byte)
 	cfg.ConfigID = data[offset]
 	offset++
 
@@ -152,7 +158,7 @@ func parseConfigInner(data []byte) (*Config, error) {
 	cfg.KEMID = binary.BigEndian.Uint16(data[offset : offset+2])
 	offset += 2
 
-	// 公钥长度 (2 bytes)
+	// Public key length (2 bytes)
 	pubKeyLen := int(binary.BigEndian.Uint16(data[offset : offset+2]))
 	offset += 2
 
@@ -160,114 +166,111 @@ func parseConfigInner(data []byte) (*Config, error) {
 		return nil, ErrInvalidECHConfig
 	}
 
-	// 公钥
+	// Public key
 	cfg.PublicKey = make([]byte, pubKeyLen)
 	copy(cfg.PublicKey, data[offset:offset+pubKeyLen])
 	offset += pubKeyLen
 
-	// HPKE 套件长度 (2 bytes)
+	// HPKE suite length (2 bytes)
 	suiteLen := int(binary.BigEndian.Uint16(data[offset : offset+2]))
 	offset += 2
 
-	// 读取 HPKE 套件 (取第一个)
-	if suiteLen > 0 && offset+4 <= len(data) {
+	// Read first HPKE suite (KDF ID + AEAD ID)
+	if offset+4 <= len(data) && suiteLen >= 4 {
 		cfg.KDFID = binary.BigEndian.Uint16(data[offset : offset+2])
 		cfg.AEADID = binary.BigEndian.Uint16(data[offset+2 : offset+4])
+		offset += suiteLen
 	}
-	offset += suiteLen * 4
 
-	// 公共名称长度 (1 byte)
+	// Public name length (1 byte)
 	if offset >= len(data) {
 		return nil, ErrInvalidECHConfig
 	}
-	nameLen := int(data[offset])
+	pubNameLen := int(data[offset])
 	offset++
 
-	if offset+nameLen > len(data) {
+	// Public name
+	if offset+pubNameLen > len(data) {
 		return nil, ErrInvalidECHConfig
 	}
+	cfg.PublicName = string(data[offset : offset+pubNameLen])
+	offset += pubNameLen
 
-	// 公共名称
-	cfg.PublicName = string(data[offset : offset+nameLen])
-	offset += nameLen
-
-	// 最大名称长度 (1 byte)
-	if offset < len(data) {
-		cfg.MaximumNameLength = data[offset]
+	// Maximum name length (1 byte)
+	if offset >= len(data) {
+		return nil, ErrInvalidECHConfig
 	}
+	cfg.MaximumNameLength = data[offset]
 
 	return cfg, nil
 }
 
-// MarshalConfigList 序列化 ECH 配置列表
+// MarshalConfigList serializes an ECH configuration list
 func MarshalConfigList(configs []Config) ([]byte, error) {
-	var configBytes []byte
+	var data []byte
 
 	for _, cfg := range configs {
-		b, err := cfg.marshal()
+		configData, err := cfg.marshal()
 		if err != nil {
 			return nil, err
 		}
-		configBytes = append(configBytes, b...)
+		data = append(data, configData...)
 	}
 
-	// 添加总长度前缀
-	result := make([]byte, 2+len(configBytes))
-	binary.BigEndian.PutUint16(result[0:2], uint16(len(configBytes)))
-	copy(result[2:], configBytes)
+	// Add total length prefix
+	result := make([]byte, 2+len(data))
+	binary.BigEndian.PutUint16(result[0:2], uint16(len(data)))
+	copy(result[2:], data)
 
 	return result, nil
 }
 
-// marshal 序列化单个 ECH 配置
+// marshal serializes a single ECH configuration
 func (c *Config) marshal() ([]byte, error) {
 	var inner []byte
 
-	// 版本
-	inner = append(inner, 0x00, byte(c.Version))
-
-	// 配置 ID
-	inner = append(inner, c.ConfigID)
+	// Version
+	inner = append(inner, 0x00, c.Version, c.ConfigID)
 
 	// KEM ID
 	inner = binary.BigEndian.AppendUint16(inner, c.KEMID)
 
-	// 公钥长度和公钥
+	// Public key length and public key
 	inner = binary.BigEndian.AppendUint16(inner, uint16(len(c.PublicKey)))
 	inner = append(inner, c.PublicKey...)
 
-	// HPKE 套件 (KDF ID + AEAD ID)
-	inner = binary.BigEndian.AppendUint16(inner, 4) // 一个套件
+	// HPKE suite (KDF ID + AEAD ID)
+	inner = binary.BigEndian.AppendUint16(inner, 4) // One suite
 	inner = binary.BigEndian.AppendUint16(inner, c.KDFID)
 	inner = binary.BigEndian.AppendUint16(inner, c.AEADID)
 
-	// 公共名称
+	// Public name
 	inner = append(inner, byte(len(c.PublicName)))
 	inner = append(inner, []byte(c.PublicName)...)
 
-	// 最大名称长度
+	// Maximum name length
 	if c.MaximumNameLength == 0 {
 		c.MaximumNameLength = 64
 	}
 	inner = append(inner, c.MaximumNameLength)
 
-	// 包装配置
+	// Wrap config
 	result := make([]byte, 4+len(inner))
-	binary.BigEndian.PutUint16(result[0:2], 4) // 配置类型长度
+	binary.BigEndian.PutUint16(result[0:2], 4) // Config type length
 	binary.BigEndian.PutUint16(result[2:4], uint16(len(inner)))
 	copy(result[4:], inner)
 
 	return result, nil
 }
 
-// LoadConfigListFromFile 从文件加载 ECH 配置列表
+// LoadConfigListFromFile loads an ECH configuration list from a file
 func LoadConfigListFromFile(path string) (*ConfigList, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
 	}
 
-	// 尝试解码 Base64
+	// Try to decode Base64
 	decoded, err := base64.StdEncoding.DecodeString(string(data))
 	if err == nil {
 		data = decoded
@@ -276,7 +279,7 @@ func LoadConfigListFromFile(path string) (*ConfigList, error) {
 	return ParseConfigList(data)
 }
 
-// LoadConfigListFromBase64 从 Base64 字符串加载 ECH 配置列表
+// LoadConfigListFromBase64 loads an ECH configuration list from a Base64 string
 func LoadConfigListFromBase64(encoded string) (*ConfigList, error) {
 	data, err := base64.StdEncoding.DecodeString(encoded)
 	if err != nil {
@@ -286,8 +289,8 @@ func LoadConfigListFromBase64(encoded string) (*ConfigList, error) {
 	return ParseConfigList(data)
 }
 
-// GenerateKey 生成 ECH 密钥对
-func GenerateKey(configID uint8, publicName string) (*Key, error) {
+// GenerateKey generates an ECH key pair
+func GenerateKey(configID uint8, _ string) (*Key, error) {
 	privateKey, err := ecdh.X25519().GenerateKey(rand.Reader)
 	if err != nil {
 		return nil, err
@@ -300,7 +303,7 @@ func GenerateKey(configID uint8, publicName string) (*Key, error) {
 	}, nil
 }
 
-// GenerateConfig 从密钥生成 ECH 配置
+// GenerateConfig generates an ECH configuration from a key
 func (k *Key) GenerateConfig(publicName string) *Config {
 	return &Config{
 		Version:           0xfe,
@@ -314,7 +317,7 @@ func (k *Key) GenerateConfig(publicName string) *Config {
 	}
 }
 
-// SavePrivateKey 保存私钥到文件 (PEM 格式)
+// SavePrivateKey saves a private key to a file (PEM format)
 func (k *Key) SavePrivateKey(path string) error {
 	block := &pem.Block{
 		Type:  "ECH PRIVATE KEY",
@@ -325,12 +328,14 @@ func (k *Key) SavePrivateKey(path string) error {
 	if err != nil {
 		return err
 	}
-	defer file.Close()
+	defer func() {
+		_ = file.Close()
+	}()
 
 	return pem.Encode(file, block)
 }
 
-// LoadPrivateKey 从文件加载私钥
+// LoadPrivateKey loads a private key from a file
 func LoadPrivateKey(path string, configID uint8) (*Key, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -354,7 +359,7 @@ func LoadPrivateKey(path string, configID uint8) (*Key, error) {
 	}, nil
 }
 
-// SaveConfigList 保存配置列表到文件 (Base64 格式)
+// SaveConfigList saves a configuration list to a file (Base64 format)
 func SaveConfigList(path string, configs []Config) error {
 	data, err := MarshalConfigList(configs)
 	if err != nil {
@@ -362,10 +367,10 @@ func SaveConfigList(path string, configs []Config) error {
 	}
 
 	encoded := base64.StdEncoding.EncodeToString(data)
-	return os.WriteFile(path, []byte(encoded), 0644)
+	return os.WriteFile(path, []byte(encoded), 0o644)
 }
 
-// ToBase64 将配置列表编码为 Base64 字符串
+// ToBase64 encodes a configuration list to a Base64 string
 func (l *ConfigList) ToBase64() (string, error) {
 	data, err := MarshalConfigList(l.Configs)
 	if err != nil {
@@ -374,19 +379,19 @@ func (l *ConfigList) ToBase64() (string, error) {
 	return base64.StdEncoding.EncodeToString(data), nil
 }
 
-// ToBytes 将配置列表序列化为字节
+// ToBytes serializes a configuration list to bytes
 func (l *ConfigList) ToBytes() ([]byte, error) {
 	return MarshalConfigList(l.Configs)
 }
 
-// LoadConfigListFromReader 从 Reader 加载配置列表
+// LoadConfigListFromReader loads a configuration list from a Reader
 func LoadConfigListFromReader(r io.Reader) (*ConfigList, error) {
 	data, err := io.ReadAll(r)
 	if err != nil {
 		return nil, err
 	}
 
-	// 尝试解码 Base64
+	// Try to decode Base64
 	decoded, err := base64.StdEncoding.DecodeString(string(data))
 	if err == nil {
 		data = decoded
@@ -395,20 +400,21 @@ func LoadConfigListFromReader(r io.Reader) (*ConfigList, error) {
 	return ParseConfigList(data)
 }
 
-// PrintConfig 打印配置信息 (用于调试)
+// PrintConfig prints configuration info (for debugging)
 func PrintConfig(cfg *Config) {
 	fmt.Printf("ECH Config:\n")
 	fmt.Printf("  Version: 0x%02x\n", cfg.Version)
 	fmt.Printf("  Config ID: %d\n", cfg.ConfigID)
 	fmt.Printf("  KEM ID: 0x%04x\n", cfg.KEMID)
-	fmt.Printf("  Public Key: %x...\n", cfg.PublicKey[:min(16, len(cfg.PublicKey))])
+	fmt.Printf("  Public Key: %x...\n", cfg.PublicKey[:minInt(16, len(cfg.PublicKey))])
 	fmt.Printf("  KDF ID: 0x%04x\n", cfg.KDFID)
 	fmt.Printf("  AEAD ID: 0x%04x\n", cfg.AEADID)
 	fmt.Printf("  Public Name: %s\n", cfg.PublicName)
 	fmt.Printf("  Max Name Length: %d\n", cfg.MaximumNameLength)
 }
 
-func min(a, b int) int {
+// minInt returns the smaller of two integers (to avoid conflict with built-in min)
+func minInt(a, b int) int {
 	if a < b {
 		return a
 	}

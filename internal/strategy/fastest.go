@@ -9,13 +9,13 @@ import (
 	"github.com/lyimoexiao/gin-doh/internal/upstream"
 )
 
-// FastestSelector 最快响应选择器
+// FastestSelector is a fastest response selector
 type FastestSelector struct {
 	BaseSelector
-	config   *config.FastestConfig
+	config    *config.FastestConfig
 	resolvers []upstream.Resolver
-	stats    []*resolverStats
-	mu       sync.RWMutex
+	stats     []*resolverStats
+	mu        sync.RWMutex
 }
 
 type resolverStats struct {
@@ -25,7 +25,7 @@ type resolverStats struct {
 	lastSelect time.Time
 }
 
-// NewFastestSelector 创建最快响应选择器
+// NewFastestSelector creates a new fastest selector
 func NewFastestSelector(resolvers []upstream.Resolver, cfg *config.FastestConfig) *FastestSelector {
 	stats := make([]*resolverStats, len(resolvers))
 	for i := range stats {
@@ -45,8 +45,8 @@ func NewFastestSelector(resolvers []upstream.Resolver, cfg *config.FastestConfig
 	}
 }
 
-// Select 选择一个上游服务器（最快响应）
-func (s *FastestSelector) Select(ctx context.Context) (upstream.Resolver, error) {
+// Select selects an upstream server (fastest response)
+func (s *FastestSelector) Select(_ context.Context) (upstream.Resolver, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -54,18 +54,18 @@ func (s *FastestSelector) Select(ctx context.Context) (upstream.Resolver, error)
 		return nil, ErrNoResolvers
 	}
 
-	// 找到最快的解析器
+	// Find fastest resolver
 	bestIdx := 0
 	bestLatency := time.Duration(1<<63 - 1)
 	validCount := 0
 
 	for i, stat := range s.stats {
-		// 检查冷却时间
+		// Check cooldown
 		if !stat.lastSelect.IsZero() && time.Since(stat.lastSelect) < s.config.Cooldown {
 			continue
 		}
 
-		// 检查最小样本数
+		// Check minimum samples
 		if len(stat.samples) >= s.config.MinSamples {
 			validCount++
 			if stat.avgLatency < bestLatency {
@@ -75,9 +75,9 @@ func (s *FastestSelector) Select(ctx context.Context) (upstream.Resolver, error)
 		}
 	}
 
-	// 如果没有足够的样本，使用轮询
+	// If not enough samples, use round robin
 	if validCount == 0 {
-		// 选择样本最少的解析器（给新解析器机会）
+		// Select resolver with least samples (give new resolvers a chance)
 		minSamples := len(s.stats[0].samples)
 		for i, stat := range s.stats {
 			if len(stat.samples) < minSamples {
@@ -91,21 +91,12 @@ func (s *FastestSelector) Select(ctx context.Context) (upstream.Resolver, error)
 	return s.resolvers[bestIdx], nil
 }
 
-// ReportSuccess 报告成功并更新统计
-func (s *FastestSelector) ReportSuccess(resolver upstream.Resolver) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	idx := s.findResolverIndex(resolver)
-	if idx < 0 {
-		return
-	}
-
-	// 记录延迟（需要在调用前记录开始时间，这里简化处理）
-	// 实际实现中应该传入延迟值
+// ReportSuccess reports success (fastest mode uses ReportSuccessWithLatency)
+func (s *FastestSelector) ReportSuccess(_ upstream.Resolver) {
+	// Fastest mode requires latency tracking, use ReportSuccessWithLatency
 }
 
-// ReportSuccessWithLatency 报告成功并记录延迟
+// ReportSuccessWithLatency reports success with latency
 func (s *FastestSelector) ReportSuccessWithLatency(resolver upstream.Resolver, latency time.Duration) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -117,13 +108,13 @@ func (s *FastestSelector) ReportSuccessWithLatency(resolver upstream.Resolver, l
 
 	stat := s.stats[idx]
 
-	// 添加到滑动窗口
+	// Add to sliding window
 	stat.samples = append(stat.samples, latency)
 	if len(stat.samples) > s.config.WindowSize {
 		stat.samples = stat.samples[1:]
 	}
 
-	// 计算平均延迟
+	// Calculate average latency
 	stat.totalCount++
 	var total time.Duration
 	for _, d := range stat.samples {
@@ -132,7 +123,7 @@ func (s *FastestSelector) ReportSuccessWithLatency(resolver upstream.Resolver, l
 	stat.avgLatency = total / time.Duration(len(stat.samples))
 }
 
-// ReportFailure 报告失败
+// ReportFailure reports failure
 func (s *FastestSelector) ReportFailure(resolver upstream.Resolver) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -142,16 +133,16 @@ func (s *FastestSelector) ReportFailure(resolver upstream.Resolver) {
 		return
 	}
 
-	// 失败时增加一个较大的延迟值作为惩罚
+	// Add a large latency value as penalty on failure
 	stat := s.stats[idx]
-	penalty := time.Second * 10 // 惩罚值
+	penalty := time.Second * 10
 	stat.samples = append(stat.samples, penalty)
 	if len(stat.samples) > s.config.WindowSize {
 		stat.samples = stat.samples[1:]
 	}
 }
 
-// findResolverIndex 查找解析器索引
+// findResolverIndex finds resolver index
 func (s *FastestSelector) findResolverIndex(resolver upstream.Resolver) int {
 	for i, r := range s.resolvers {
 		if r == resolver {
@@ -161,7 +152,7 @@ func (s *FastestSelector) findResolverIndex(resolver upstream.Resolver) int {
 	return -1
 }
 
-// GetStats 获取解析器统计信息
+// GetStats gets resolver statistics
 func (s *FastestSelector) GetStats() []ResolverStats {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -177,7 +168,7 @@ func (s *FastestSelector) GetStats() []ResolverStats {
 	return result
 }
 
-// ResolverStats 解析器统计信息
+// ResolverStats contains resolver statistics
 type ResolverStats struct {
 	AvgLatency time.Duration
 	Samples    int

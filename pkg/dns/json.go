@@ -1,3 +1,4 @@
+// Package dns provides DNS JSON response formatting utilities.
 package dns
 
 import (
@@ -7,27 +8,27 @@ import (
 	"time"
 )
 
-// JSONResponse DNS JSON 响应格式 (遵循 Google DoH API 格式)
+// JSONResponse is a DNS JSON response format (following Google DoH API format)
 type JSONResponse struct {
-	Status    int           `json:"Status"`
-	TC        bool          `json:"TC"`
-	RD        bool          `json:"RD"`
-	RA        bool          `json:"RA"`
-	AD        bool          `json:"AD"`
-	CD        bool          `json:"CD"`
+	Status    int            `json:"Status"`
+	TC        bool           `json:"TC"`
+	RD        bool           `json:"RD"`
+	RA        bool           `json:"RA"`
+	AD        bool           `json:"AD"`
+	CD        bool           `json:"CD"`
 	Question  []JSONQuestion `json:"Question,omitempty"`
 	Answer    []JSONAnswer   `json:"Answer,omitempty"`
 	Authority []JSONAnswer   `json:"Authority,omitempty"`
 	Comment   string         `json:"Comment,omitempty"`
 }
 
-// JSONQuestion JSON 问题格式
+// JSONQuestion is a JSON question format
 type JSONQuestion struct {
 	Name string `json:"name"`
 	Type int    `json:"type"`
 }
 
-// JSONAnswer JSON 回答格式
+// JSONAnswer is a JSON answer format
 type JSONAnswer struct {
 	Name string `json:"name"`
 	Type int    `json:"type"`
@@ -35,7 +36,7 @@ type JSONAnswer struct {
 	Data string `json:"data"`
 }
 
-// WireToJSON 将 Wire Format 转换为 JSON 格式
+// WireToJSON converts Wire Format to JSON format
 func WireToJSON(data []byte) (*JSONResponse, error) {
 	msg, err := ParseMessage(data)
 	if err != nil {
@@ -51,7 +52,7 @@ func WireToJSON(data []byte) (*JSONResponse, error) {
 		CD:     (msg.Header.Flags & 0x0010) != 0,
 	}
 
-	// 转换问题
+	// Convert questions
 	for _, q := range msg.Questions {
 		resp.Question = append(resp.Question, JSONQuestion{
 			Name: q.Name,
@@ -59,19 +60,19 @@ func WireToJSON(data []byte) (*JSONResponse, error) {
 		})
 	}
 
-	// 转换回答
+	// Convert answers
 	for _, a := range msg.Answers {
-		// 计算剩余 TTL（简化处理，使用原始 TTL）
+		// Calculate remaining TTL (simplified, use original TTL)
 		ttl := int(a.TTL)
 		if ttl < 0 {
 			ttl = 0
 		}
 
-		// 格式化 data 字段
+		// Format data field
 		dataStr := a.RdataStr
-		
-		// 如果解析成功且非空，直接使用
-		// 否则使用 RFC 8427 格式
+
+		// If parsing succeeded and non-empty, use directly
+		// Otherwise use RFC 8427 format
 		if dataStr == "" {
 			dataStr = formatUnknownRdata(a.Rdata)
 		}
@@ -87,16 +88,16 @@ func WireToJSON(data []byte) (*JSONResponse, error) {
 	return resp, nil
 }
 
-// formatUnknownRdata 格式化未知类型的 Rdata (RFC 8427 格式)
+// formatUnknownRdata formats unknown type Rdata (RFC 8427 format)
 func formatUnknownRdata(rdata []byte) string {
 	if len(rdata) == 0 {
 		return "\\# 0"
 	}
-	// 使用空格分隔的十六进制格式，与 Cloudflare 保持一致
+	// Use space-separated hex format, consistent with Cloudflare
 	return fmt.Sprintf("\\# %d %s", len(rdata), formatHexWithSpaces(rdata))
 }
 
-// formatHexWithSpaces 格式化十六进制并用空格分隔
+// formatHexWithSpaces formats hex with space separation
 func formatHexWithSpaces(data []byte) string {
 	parts := make([]string, len(data))
 	for i, b := range data {
@@ -105,31 +106,31 @@ func formatHexWithSpaces(data []byte) string {
 	return strings.Join(parts, " ")
 }
 
-// ToJSONBytes 转换为 JSON 字节
+// ToJSONBytes converts to JSON bytes
 func (r *JSONResponse) ToJSONBytes() ([]byte, error) {
 	return json.Marshal(r)
 }
 
-// IsAcceptJSON 检查 Accept 头是否要求 JSON 格式
+// IsAcceptJSON checks if Accept header requires JSON format
 func IsAcceptJSON(accept string) bool {
 	return accept == "application/dns-json" ||
 		accept == "application/json"
 }
 
-// IsAcceptWireFormat 检查 Accept 头是否要求 Wire Format
+// IsAcceptWireFormat checks if Accept header requires Wire Format
 func IsAcceptWireFormat(accept string) bool {
 	return accept == "application/dns-message" || accept == ""
 }
 
-// QueryParams DNS JSON 查询参数
+// QueryParams DNS JSON query parameters
 type QueryParams struct {
 	Name string
 	Type string
-	CD   bool // 禁用 DNSSEC
-	DO   bool // 包含 DNSSEC 记录
+	CD   bool // Disable DNSSEC
+	DO   bool // Include DNSSEC records
 }
 
-// JSONResponseFromError 从错误创建 JSON 响应
+// JSONResponseFromError creates a JSON response from an error
 func JSONResponseFromError(rcode int, comment string) *JSONResponse {
 	return &JSONResponse{
 		Status:  rcode,
@@ -137,7 +138,7 @@ func JSONResponseFromError(rcode int, comment string) *JSONResponse {
 	}
 }
 
-// CurrentTimestamp 获取当前时间戳
+// CurrentTimestamp returns the current timestamp
 func CurrentTimestamp() string {
 	return time.Now().UTC().Format(time.RFC3339)
 }

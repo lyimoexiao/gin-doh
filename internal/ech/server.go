@@ -10,28 +10,28 @@ import (
 	"os"
 )
 
-// ServerECHConfig 服务端 ECH 配置管理器
+// ServerECHConfig manages server-side ECH configuration
 type ServerECHConfig struct {
 	Keys        []Key
-	ConfigList  []byte // 用于发送给客户端的配置列表
-	RetryConfig []byte // 重试配置列表
+	ConfigList  []byte // Config list to send to clients
+	RetryConfig []byte // Retry config list
 	PublicName  string
 }
 
-// NewServerECHConfig 创建服务端 ECH 配置
+// NewServerECHConfig creates a new server-side ECH config
 func NewServerECHConfig(publicName string) *ServerECHConfig {
 	return &ServerECHConfig{
 		PublicName: publicName,
 	}
 }
 
-// AddKey 添加 ECH 密钥
+// AddKey adds an ECH key
 func (s *ServerECHConfig) AddKey(key *Key) error {
 	s.Keys = append(s.Keys, *key)
 	return s.rebuildConfigList()
 }
 
-// GenerateAndAddKey 生成并添加新密钥
+// GenerateAndAddKey generates and adds a new key
 func (s *ServerECHConfig) GenerateAndAddKey(configID uint8) error {
 	key, err := GenerateKey(configID, s.PublicName)
 	if err != nil {
@@ -40,7 +40,7 @@ func (s *ServerECHConfig) GenerateAndAddKey(configID uint8) error {
 	return s.AddKey(key)
 }
 
-// rebuildConfigList 重建配置列表
+// rebuildConfigList rebuilds the configuration list
 func (s *ServerECHConfig) rebuildConfigList() error {
 	var configs []Config
 	for _, key := range s.Keys {
@@ -57,7 +57,7 @@ func (s *ServerECHConfig) rebuildConfigList() error {
 	return nil
 }
 
-// LoadKeysFromFile 从文件加载密钥
+// LoadKeysFromFile loads keys from files
 func (s *ServerECHConfig) LoadKeysFromFile(keyPaths map[uint8]string) error {
 	for configID, path := range keyPaths {
 		key, err := LoadPrivateKey(path, configID)
@@ -69,14 +69,14 @@ func (s *ServerECHConfig) LoadKeysFromFile(keyPaths map[uint8]string) error {
 	return s.rebuildConfigList()
 }
 
-// LoadConfigListFromFile 从文件加载配置列表
+// LoadConfigListFromFile loads a configuration list from a file
 func (s *ServerECHConfig) LoadConfigListFromFile(path string) error {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return err
 	}
 
-	// 尝试解码 Base64
+	// Try to decode Base64
 	decoded, err := base64.StdEncoding.DecodeString(string(data))
 	if err == nil {
 		data = decoded
@@ -86,14 +86,14 @@ func (s *ServerECHConfig) LoadConfigListFromFile(path string) error {
 	return nil
 }
 
-// LoadRetryConfigFromFile 从文件加载重试配置
+// LoadRetryConfigFromFile loads a retry configuration from a file
 func (s *ServerECHConfig) LoadRetryConfigFromFile(path string) error {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return err
 	}
 
-	// 尝试解码 Base64
+	// Try to decode Base64
 	decoded, err := base64.StdEncoding.DecodeString(string(data))
 	if err == nil {
 		data = decoded
@@ -103,8 +103,8 @@ func (s *ServerECHConfig) LoadRetryConfigFromFile(path string) error {
 	return nil
 }
 
-// GetTLSConfig 获取 ECH 相关的 TLS 配置
-// 注意：Go 标准库目前仅支持客户端 ECH，服务端 ECH 支持有限
+// GetTLSConfig returns ECH-related TLS configuration
+// Note: Go standard library currently only supports client-side ECH, server-side ECH support is limited
 func (s *ServerECHConfig) GetTLSConfig(baseConfig *tls.Config) (*tls.Config, error) {
 	if baseConfig == nil {
 		baseConfig = &tls.Config{
@@ -112,33 +112,33 @@ func (s *ServerECHConfig) GetTLSConfig(baseConfig *tls.Config) (*tls.Config, err
 		}
 	}
 
-	// Go 1.25+ 服务端 ECH 支持需要使用 EncryptedClientHelloKeys
-	// 这里我们准备配置，实际支持取决于 Go 版本
+	// Go 1.25+ server-side ECH support requires EncryptedClientHelloKeys
+	// Here we prepare the configuration, actual support depends on Go version
 
-	// 设置最小版本为 TLS 1.3
+	// Set minimum version to TLS 1.3
 	baseConfig.MinVersion = tls.VersionTLS13
 
 	return baseConfig, nil
 }
 
-// ClientECHConfig 客户端 ECH 配置
+// ClientECHConfig represents client-side ECH configuration
 type ClientECHConfig struct {
 	ConfigList []byte
 }
 
-// NewClientECHConfig 创建客户端 ECH 配置
+// NewClientECHConfig creates a new client-side ECH config
 func NewClientECHConfig() *ClientECHConfig {
 	return &ClientECHConfig{}
 }
 
-// LoadConfigListFromFile 从文件加载配置列表
+// LoadConfigListFromFile loads a configuration list from a file
 func (c *ClientECHConfig) LoadConfigListFromFile(path string) error {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return err
 	}
 
-	// 尝试解码 Base64
+	// Try to decode Base64
 	decoded, err := base64.StdEncoding.DecodeString(string(data))
 	if err == nil {
 		data = decoded
@@ -148,7 +148,7 @@ func (c *ClientECHConfig) LoadConfigListFromFile(path string) error {
 	return nil
 }
 
-// LoadConfigListFromBase64 从 Base64 加载配置列表
+// LoadConfigListFromBase64 loads a configuration list from Base64
 func (c *ClientECHConfig) LoadConfigListFromBase64(encoded string) error {
 	data, err := base64.StdEncoding.DecodeString(encoded)
 	if err != nil {
@@ -159,7 +159,7 @@ func (c *ClientECHConfig) LoadConfigListFromBase64(encoded string) error {
 	return nil
 }
 
-// GetTLSConfig 获取带有 ECH 配置的 TLS 客户端配置
+// GetTLSConfig returns TLS client config with ECH configuration
 func (c *ClientECHConfig) GetTLSConfig(baseConfig *tls.Config) (*tls.Config, error) {
 	if baseConfig == nil {
 		baseConfig = &tls.Config{
@@ -168,22 +168,22 @@ func (c *ClientECHConfig) GetTLSConfig(baseConfig *tls.Config) (*tls.Config, err
 	}
 
 	if len(c.ConfigList) > 0 {
-		// Go 1.23+ 支持 EncryptedClientHelloConfigList
+		// Go 1.23+ supports EncryptedClientHelloConfigList
 		baseConfig.EncryptedClientHelloConfigList = c.ConfigList
 	}
 
 	return baseConfig, nil
 }
 
-// ECHKeyProvider ECH 密钥提供者接口
-type ECHKeyProvider interface {
-	// GetKey 根据配置 ID 获取密钥
+// KeyProvider is the ECH key provider interface
+type KeyProvider interface {
+	// GetKey returns a key by configuration ID
 	GetKey(configID uint8) (*Key, bool)
-	// GetAllKeys 获取所有密钥
+	// GetAllKeys returns all keys
 	GetAllKeys() []Key
 }
 
-// GetKey 根据 ID 获取密钥
+// GetKey returns a key by ID
 func (s *ServerECHConfig) GetKey(configID uint8) (*Key, bool) {
 	for i := range s.Keys {
 		if s.Keys[i].ConfigID == configID {
@@ -193,18 +193,18 @@ func (s *ServerECHConfig) GetKey(configID uint8) (*Key, bool) {
 	return nil, false
 }
 
-// GetAllKeys 获取所有密钥
+// GetAllKeys returns all keys
 func (s *ServerECHConfig) GetAllKeys() []Key {
 	return s.Keys
 }
 
-// PEMBlock PEM 块结构
+// PEMBlock represents a PEM block structure
 type PEMBlock struct {
 	Type  string
 	Bytes []byte
 }
 
-// encodePEM 编码 PEM 块
+// encodePEM encodes a PEM block
 func encodePEM(block *PEMBlock) []byte {
 	return []byte(fmt.Sprintf("-----BEGIN %s-----\n%s-----END %s-----\n",
 		block.Type,
@@ -212,78 +212,78 @@ func encodePEM(block *PEMBlock) []byte {
 		block.Type))
 }
 
-// GenerateKeyPair 生成 ECH 密钥对并保存到文件
+// GenerateKeyPair generates an ECH key pair and saves to files
 func GenerateKeyPair(configID uint8, publicKeyFile, privateKeyFile string) error {
 	key, err := GenerateKey(configID, "")
 	if err != nil {
 		return err
 	}
 
-	// 保存私钥
+	// Save private key
 	if err := key.SavePrivateKey(privateKeyFile); err != nil {
 		return err
 	}
 
-	// 保存公钥
+	// Save public key
 	pubKeyBlock := &PEMBlock{
 		Type:  "ECH PUBLIC KEY",
 		Bytes: key.PublicKey.Bytes(),
 	}
 	pubKeyData := encodePEM(pubKeyBlock)
-	return os.WriteFile(publicKeyFile, pubKeyData, 0644)
+	return os.WriteFile(publicKeyFile, pubKeyData, 0o644)
 }
 
-// ECHGreaseConfig ECH GREASE 配置 (用于发送假 ECH 扩展)
-type ECHGreaseConfig struct {
+// GreaseConfig represents ECH GREASE configuration (for sending fake ECH extensions)
+type GreaseConfig struct {
 	Enabled bool
 }
 
-// NewECHGreaseConfig 创建 GREASE 配置
-func NewECHGreaseConfig() *ECHGreaseConfig {
-	return &ECHGreaseConfig{
+// NewGreaseConfig creates a new GREASE config
+func NewGreaseConfig() *GreaseConfig {
+	return &GreaseConfig{
 		Enabled: true,
 	}
 }
 
-// GenerateGreaseECH 生成 GREASE ECH 扩展数据
-func (g *ECHGreaseConfig) GenerateGreaseECH() []byte {
-	// 生成随机数据模拟 ECH 扩展
-	// 实际实现应该遵循 draft-ietf-tls-esni
+// GenerateGreaseECH generates GREASE ECH extension data
+func (g *GreaseConfig) GenerateGreaseECH() []byte {
+	// Generate random data to simulate ECH extension
+	// Actual implementation should follow draft-ietf-tls-esni
 	data := make([]byte, 128)
-	rand.Read(data)
+	_, _ = rand.Read(data)
 	return data
 }
 
-// ParseClientHelloECH 从 ClientHello 解析 ECH 信息
-func ParseClientHelloECH(hello []byte) (hasECH bool, isInner bool, configID uint8, err error) {
-	// 简化的 ECH 扩展解析
-	// 实际实现需要完整的 TLS 扩展解析
+// ParseClientHelloECH parses ECH info from ClientHello
+func ParseClientHelloECH(hello []byte) (hasECH, isInner bool, configID uint8, err error) {
+	// Simplified ECH extension parsing
+	// Actual implementation requires full TLS extension parsing
 
 	if len(hello) < 43 {
 		return false, false, 0, nil
 	}
 
-	// 查找 ECH 扩展 (扩展类型 0xfe0d)
-	// 这里只是示意，实际需要完整解析
+	// Find ECH extension (extension type 0xfe0d)
+	// This is just a placeholder, actual implementation needs full parsing
 
 	return false, false, 0, nil
 }
 
-// DecryptClientHello 解密 ECH ClientHello (服务端使用)
-func DecryptClientHello(encryptedHello []byte, key *Key) ([]byte, error) {
-	// HPKE 解密实现
-	// 这需要完整的 HPKE 实现
+// DecryptClientHello decrypts ECH ClientHello (server-side use)
+func DecryptClientHello(_ []byte, _ *Key) ([]byte, error) {
+	// HPKE decryption implementation
+	// This requires full HPKE implementation
 
 	return nil, fmt.Errorf("ECH decryption not implemented")
 }
 
-// EncryptedClientHelloKey 用于 Go 1.25+ 的 ECH 密钥格式
+// EncryptedClientHelloKey represents ECH key format for Go 1.25+
 type EncryptedClientHelloKey struct {
 	ID         uint8
 	PrivateKey *ecdh.PrivateKey
 }
 
-// ToGoECHKey 转换为 Go 标准库的 ECH 密钥格式
+// ToGoECHKey converts to Go standard library ECH key format
 func (k *Key) ToGoECHKey() *EncryptedClientHelloKey {
 	return &EncryptedClientHelloKey{
 		ID:         k.ConfigID,
@@ -291,7 +291,7 @@ func (k *Key) ToGoECHKey() *EncryptedClientHelloKey {
 	}
 }
 
-// ParseEncryptedClientHelloConfigList 解析 ECH 配置列表 (简化版)
+// ParseEncryptedClientHelloConfigList parses ECH config list (simplified)
 func ParseEncryptedClientHelloConfigList(data []byte) ([]byte, error) {
 	if len(data) < 2 {
 		return nil, ErrInvalidECHConfigList

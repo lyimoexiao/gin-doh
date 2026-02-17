@@ -1,3 +1,4 @@
+// Package main provides the gin-doh DNS-over-HTTPS server.
 package main
 
 import (
@@ -47,11 +48,17 @@ func main() {
 	printVersion()
 	fmt.Println()
 
+	if err := run(); err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(1)
+	}
+}
+
+func run() error {
 	// Load configuration
 	cfg, err := config.Load(*configPath)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Failed to load config: %v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("failed to load config: %w", err)
 	}
 
 	// Initialize logger
@@ -61,48 +68,81 @@ func main() {
 		Fields: cfg.Logging.Fields,
 	})
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Failed to initialize logger: %v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("failed to initialize logger: %w", err)
 	}
-	defer log.Sync()
+	defer func() {
+		if syncErr := log.Sync(); syncErr != nil {
+			fmt.Fprintf(os.Stderr, "Failed to sync logger: %v\n", syncErr)
+		}
+	}()
 
 	log.Infof("gin-doh %s starting...", version)
 
-	// Initialize global proxy
-	var globalProxy *proxy.Manager
-	if cfg.Upstream.Proxy != nil && cfg.Upstream.Proxy.Enabled {
-		globalProxy, err = proxy.NewManager(cfg.Upstream.Proxy)
-		if err != nil {
-			log.Fatalf("Failed to initialize proxy: %v", err)
-		}
-		log.Infof("Global proxy enabled: %s", cfg.Upstream.Proxy.Address)
+	// Initialize components
+	globalProxy, err := initProxy(cfg, log)
+	if err != nil {
+		return err
 	}
 
-	// Initialize global ECH client config (for upstream DoH connections)
-	var globalECHConfig *ech.ClientECHConfig
-	echConfigAvailable := false
-	if cfg.Server.TLS.ECH.ConfigListFile != "" {
-		globalECHConfig = ech.NewClientECHConfig()
-		if err := globalECHConfig.LoadConfigListFromFile(cfg.Server.TLS.ECH.ConfigListFile); err != nil {
-			log.Warnf("Failed to load global ECH config: %v", err)
-			globalECHConfig = nil
-		} else {
-			log.Info("Global ECH client config loaded")
-			echConfigAvailable = true
-		}
+	globalECHConfig, echConfigAvailable, err := initECHConfig(cfg, log)
+	if err != nil {
+		return err
 	}
 
-	// Determine if encrypted upstream is forced
+	// Create resolvers
+	resolvers, priorities, err := createResolvers(cfg, globalProxy, globalECHConfig, echConfigAvailable, log)
+	if err != nil {
+		return err
+	}
+
+	// Create selector strategy
+	selector := createSelector(cfg, resolvers, priorities)
+	log.Infof("Upstream strategy: %s", selector.Name())
+
+	// Create DoH handler
+	dohHandler := handler.NewDoHHandler(selector, log, cfg.Server.RateLimit.MaxQuerySize)
+
+	// Setup and run server
+	return runServer(cfg, dohHandler, log)
+}
+
+func initProxy(cfg *config.Config, log *logger.Logger) (*proxy.Manager, error) {
+	if cfg.Upstream.Proxy == nil || !cfg.Upstream.Proxy.Enabled {
+		return nil, nil
+	}
+	pm, err := proxy.NewManager(cfg.Upstream.Proxy)
+	if err != nil {
+		return nil, fmt.Errorf("failed to initialize proxy: %w", err)
+	}
+	log.Infof("Global proxy enabled: %s", cfg.Upstream.Proxy.Address)
+	return pm, nil
+}
+
+func initECHConfig(cfg *config.Config, log *logger.Logger) (*ech.ClientECHConfig, bool, error) {
+	if cfg.Server.TLS.ECH.ConfigListFile == "" {
+		return nil, false, nil
+	}
+
+	globalECHConfig := ech.NewClientECHConfig()
+	if err := globalECHConfig.LoadConfigListFromFile(cfg.Server.TLS.ECH.ConfigListFile); err != nil {
+		log.Warnf("Failed to load global ECH config: %v", err)
+		return nil, false, nil
+	}
+	log.Info("Global ECH client config loaded")
+	return globalECHConfig, true, nil
+}
+
+func createResolvers(cfg *config.Config, globalProxy *proxy.Manager, globalECHConfig *ech.ClientECHConfig, echConfigAvailable bool, log *logger.Logger) ([]upstream.Resolver, []int, error) {
 	forceEncrypted := cfg.Server.TLS.ECH.Enabled && cfg.Server.TLS.ECH.ForceEncryptedUpstream
 	if forceEncrypted {
 		log.Info("ECH mode enabled, forcing encrypted upstream (DoH/DoT)")
 	}
 
-	// Create resolvers
 	factory := upstream.NewFactory(globalProxy,
 		upstream.WithForceEncrypted(forceEncrypted),
 		upstream.WithECHAvailable(echConfigAvailable),
 	)
+
 	resolvers := make([]upstream.Resolver, 0, len(cfg.Upstream.Servers))
 	priorities := make([]int, 0, len(cfg.Upstream.Servers))
 
@@ -118,26 +158,24 @@ func main() {
 	}
 
 	if len(resolvers) == 0 {
-		log.Fatal("No upstream resolvers available")
+		return nil, nil, fmt.Errorf("no upstream resolvers available")
 	}
 
-	// Create selector strategy
-	var selector strategy.Selector
+	return resolvers, priorities, nil
+}
+
+func createSelector(cfg *config.Config, resolvers []upstream.Resolver, priorities []int) strategy.Selector {
 	switch cfg.Upstream.Strategy {
-	case "round-robin":
-		selector = strategy.NewRoundRobinSelector(resolvers)
 	case "failover":
-		selector = strategy.NewFailoverSelector(resolvers, priorities, &cfg.Upstream.HealthCheck)
+		return strategy.NewFailoverSelector(resolvers, priorities, &cfg.Upstream.HealthCheck)
 	case "fastest":
-		selector = strategy.NewFastestSelector(resolvers, &cfg.Upstream.FastestConfig)
+		return strategy.NewFastestSelector(resolvers, &cfg.Upstream.FastestConfig)
 	default:
-		selector = strategy.NewRoundRobinSelector(resolvers)
+		return strategy.NewRoundRobinSelector(resolvers)
 	}
-	log.Infof("Upstream strategy: %s", selector.Name())
+}
 
-	// Create DoH handler
-	dohHandler := handler.NewDoHHandler(selector, log, cfg.Server.RateLimit.MaxQuerySize)
-
+func runServer(cfg *config.Config, dohHandler *handler.DoHHandler, log *logger.Logger) error {
 	// Set Gin mode
 	if cfg.Logging.Level == "debug" {
 		gin.SetMode(gin.DebugMode)
@@ -179,55 +217,23 @@ func main() {
 		IdleTimeout:  60 * time.Second,
 	}
 
-	// Start server
+	// Start server in goroutine
+	errCh := make(chan error, 1)
 	go func() {
-		var err error
-		if cfg.Server.TLS.Enabled {
-			// Configure TLS
-			tlsConfig := &tls.Config{
-				MinVersion: tls.VersionTLS12,
-				NextProtos: []string{"h2", "http/1.1"},
-			}
-
-			// Load certificate
-			cert, err := tls.LoadX509KeyPair(cfg.Server.TLS.CertFile, cfg.Server.TLS.KeyFile)
-			if err != nil {
-				log.Fatalf("Failed to load certificate: %v", err)
-			}
-			tlsConfig.Certificates = []tls.Certificate{cert}
-
-			// Configure server-side ECH
-			if cfg.Server.TLS.ECH.Enabled {
-				serverECH, err := setupServerECH(&cfg.Server.TLS.ECH, log)
-				if err != nil {
-					log.Warnf("Failed to configure ECH: %v", err)
-				} else if serverECH != nil {
-					tlsConfig, err = serverECH.GetTLSConfig(tlsConfig)
-					if err != nil {
-						log.Warnf("Failed to apply ECH config: %v", err)
-					} else {
-						log.Info("Server-side ECH enabled")
-					}
-				}
-			}
-
-			srv.TLSConfig = tlsConfig
-			log.Infof("HTTPS server started, listening on %s", cfg.Server.Listen)
-			err = srv.ListenAndServeTLS("", "") // Certificate already configured in TLSConfig
-		} else {
-			log.Infof("HTTP server started, listening on %s", cfg.Server.Listen)
-			err = srv.ListenAndServe()
-		}
-
-		if err != nil && err != http.ErrServerClosed {
-			log.Fatalf("Server startup failed: %v", err)
-		}
+		errCh <- startServer(cfg, srv, log)
 	}()
 
 	// Graceful shutdown
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
-	<-quit
+
+	select {
+	case err := <-errCh:
+		if err != nil {
+			return fmt.Errorf("server startup failed: %w", err)
+		}
+	case <-quit:
+	}
 
 	log.Info("Shutting down server...")
 
@@ -239,6 +245,60 @@ func main() {
 	}
 
 	log.Info("Server stopped")
+	return nil
+}
+
+func startServer(cfg *config.Config, srv *http.Server, log *logger.Logger) error {
+	if cfg.Server.TLS.Enabled {
+		return startTLSServer(cfg, srv, log)
+	}
+
+	log.Infof("HTTP server started, listening on %s", cfg.Server.Listen)
+	return srv.ListenAndServe()
+}
+
+func startTLSServer(cfg *config.Config, srv *http.Server, log *logger.Logger) error {
+	tlsConfig := &tls.Config{
+		MinVersion: tls.VersionTLS12,
+		NextProtos: []string{"h2", "http/1.1"},
+	}
+
+	// Load certificate
+	cert, err := tls.LoadX509KeyPair(cfg.Server.TLS.CertFile, cfg.Server.TLS.KeyFile)
+	if err != nil {
+		return fmt.Errorf("failed to load certificate: %w", err)
+	}
+	tlsConfig.Certificates = []tls.Certificate{cert}
+
+	// Configure server-side ECH
+	if cfg.Server.TLS.ECH.Enabled {
+		tlsConfig, err = configureECH(cfg, tlsConfig, log)
+		if err != nil {
+			log.Warnf("Failed to configure ECH: %v", err)
+		}
+	}
+
+	srv.TLSConfig = tlsConfig
+	log.Infof("HTTPS server started, listening on %s", cfg.Server.Listen)
+	return srv.ListenAndServeTLS("", "")
+}
+
+func configureECH(cfg *config.Config, tlsConfig *tls.Config, log *logger.Logger) (*tls.Config, error) {
+	serverECH, err := setupServerECH(&cfg.Server.TLS.ECH, log)
+	if err != nil {
+		return tlsConfig, err
+	}
+	if serverECH == nil {
+		return tlsConfig, nil
+	}
+
+	newTLSConfig, err := serverECH.GetTLSConfig(tlsConfig)
+	if err != nil {
+		return tlsConfig, err
+	}
+
+	log.Info("Server-side ECH enabled")
+	return newTLSConfig, nil
 }
 
 // setupServerECH configures server-side ECH

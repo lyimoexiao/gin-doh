@@ -1,3 +1,4 @@
+// Package dns provides DNS message parsing and encoding utilities.
 package dns
 
 import (
@@ -6,14 +7,15 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"strconv"
 	"strings"
 )
 
-// DNS 消息相关常量
+// DNS message constants
 const (
 	HeaderSize = 12
 
-	// DNS 记录类型
+	// DNS record types
 	TypeA     = 1
 	TypeAAAA  = 28
 	TypeCNAME = 5
@@ -24,10 +26,10 @@ const (
 	TypeSOA   = 6
 	TypeSRV   = 33
 	TypeCAA   = 257
-	TypeHTTPS = 65  // HTTPS SVCB 记录 (RFC 9460)
-	TypeSVCB  = 64  // SVCB 记录 (RFC 9460)
+	TypeHTTPS = 65 // HTTPS SVCB record (RFC 9460)
+	TypeSVCB  = 64 // SVCB record (RFC 9460)
 
-	// DNS 响应码
+	// DNS response codes
 	RcodeNoError  = 0
 	RcodeFormErr  = 1
 	RcodeServFail = 2
@@ -36,7 +38,7 @@ const (
 	RcodeRefused  = 5
 )
 
-// Header DNS 消息头
+// Header is a DNS message header
 type Header struct {
 	ID      uint16
 	Flags   uint16
@@ -46,34 +48,34 @@ type Header struct {
 	Arcount uint16
 }
 
-// Question DNS 问题
+// Question is a DNS question
 type Question struct {
 	Name  string
 	Type  uint16
 	Class uint16
 }
 
-// ResourceRecord DNS 资源记录
+// ResourceRecord is a DNS resource record
 type ResourceRecord struct {
-	Name   string
-	Type   uint16
-	Class  uint16
-	TTL    uint32
-	Rdata  []byte
-	RdataStr string // 用于 JSON 输出
+	Name     string
+	Type     uint16
+	Class    uint16
+	TTL      uint32
+	Rdata    []byte
+	RdataStr string // For JSON output
 }
 
-// Message DNS 消息
+// Message is a DNS message
 type Message struct {
-	Header    Header
-	Questions []Question
-	Answers   []ResourceRecord
-	Authority []ResourceRecord
+	Header     Header
+	Questions  []Question
+	Answers    []ResourceRecord
+	Authority  []ResourceRecord
 	Additional []ResourceRecord
-	rawData   []byte // 保存原始数据用于解析压缩指针
+	rawData    []byte // Store raw data for parsing compressed pointers
 }
 
-// RcodeToString 响应码转字符串
+// RcodeToString converts response code to string
 func RcodeToString(rcode int) string {
 	switch rcode {
 	case RcodeNoError:
@@ -93,7 +95,7 @@ func RcodeToString(rcode int) string {
 	}
 }
 
-// TypeToString 类型转字符串
+// TypeToString converts type to string
 func TypeToString(t uint16) string {
 	switch t {
 	case TypeA:
@@ -125,51 +127,47 @@ func TypeToString(t uint16) string {
 	}
 }
 
-// StringToType 字符串转类型
+// StringToType converts string to type
 func StringToType(s string) uint16 {
 	upper := strings.ToUpper(s)
-	switch upper {
-	case "A":
-		return TypeA
-	case "AAAA":
-		return TypeAAAA
-	case "CNAME":
-		return TypeCNAME
-	case "MX":
-		return TypeMX
-	case "TXT":
-		return TypeTXT
-	case "NS":
-		return TypeNS
-	case "PTR":
-		return TypePTR
-	case "SOA":
-		return TypeSOA
-	case "SRV":
-		return TypeSRV
-	case "CAA":
-		return TypeCAA
-	case "HTTPS":
-		return TypeHTTPS
-	case "SVCB":
-		return TypeSVCB
-	default:
-		// 尝试解析 TYPExxx 格式
-		if len(upper) > 4 && upper[:4] == "TYPE" {
-			var num uint16
-			fmt.Sscanf(s[4:], "%d", &num)
-			return num
-		}
-		// 尝试解析纯数字格式 (如 "65")
-		var num uint16
-		if n, _ := fmt.Sscanf(s, "%d", &num); n == 1 && num > 0 {
-			return num
-		}
-		return 0
+
+	// Check well-known types
+	if t, ok := stringToTypeMap[upper]; ok {
+		return t
 	}
+
+	// Try parsing TYPExxx format
+	if len(upper) > 4 && upper[:4] == "TYPE" {
+		num, _ := strconv.Atoi(s[4:])
+		return uint16(num)
+	}
+
+	// Try parsing pure number format (e.g., "65")
+	num, err := strconv.Atoi(s)
+	if err == nil && num > 0 {
+		return uint16(num)
+	}
+
+	return 0
 }
 
-// ParseMessage 解析 DNS 消息
+// stringToTypeMap maps DNS type strings to their numeric values
+var stringToTypeMap = map[string]uint16{
+	"A":     TypeA,
+	"AAAA":  TypeAAAA,
+	"CNAME": TypeCNAME,
+	"MX":    TypeMX,
+	"TXT":   TypeTXT,
+	"NS":    TypeNS,
+	"PTR":   TypePTR,
+	"SOA":   TypeSOA,
+	"SRV":   TypeSRV,
+	"CAA":   TypeCAA,
+	"HTTPS": TypeHTTPS,
+	"SVCB":  TypeSVCB,
+}
+
+// ParseMessage parses a DNS message
 func ParseMessage(data []byte) (*Message, error) {
 	if len(data) < HeaderSize {
 		return nil, errors.New("message too short")
@@ -184,12 +182,12 @@ func ParseMessage(data []byte) (*Message, error) {
 			Nscount: binary.BigEndian.Uint16(data[8:10]),
 			Arcount: binary.BigEndian.Uint16(data[10:12]),
 		},
-		rawData: data, // 保存原始数据
+		rawData: data,
 	}
 
 	offset := HeaderSize
 
-	// 解析问题
+	// Parse questions
 	for i := uint16(0); i < msg.Header.Qdcount; i++ {
 		q, newOffset, err := parseQuestion(data, offset)
 		if err != nil {
@@ -199,7 +197,7 @@ func ParseMessage(data []byte) (*Message, error) {
 		offset = newOffset
 	}
 
-	// 解析回答
+	// Parse answers
 	for i := uint16(0); i < msg.Header.Ancount; i++ {
 		rr, newOffset, err := parseResourceRecordWithContext(data, offset, msg.rawData)
 		if err != nil {
@@ -212,8 +210,8 @@ func ParseMessage(data []byte) (*Message, error) {
 	return msg, nil
 }
 
-// parseQuestion 解析 DNS 问题
-func parseQuestion(data []byte, offset int) (Question, int, error) {
+// parseQuestion parses a DNS question
+func parseQuestion(data []byte, offset int) (q Question, newOffset int, err error) {
 	name, newOffset, err := parseName(data, offset)
 	if err != nil {
 		return Question{}, 0, err
@@ -230,13 +228,8 @@ func parseQuestion(data []byte, offset int) (Question, int, error) {
 	}, newOffset + 4, nil
 }
 
-// parseResourceRecord 解析资源记录 (不包含压缩指针上下文)
-func parseResourceRecord(data []byte, offset int) (*ResourceRecord, int, error) {
-	return parseResourceRecordWithContext(data, offset, data)
-}
-
-// parseResourceRecordWithContext 解析资源记录 (带完整消息上下文)
-func parseResourceRecordWithContext(data []byte, offset int, fullMsg []byte) (*ResourceRecord, int, error) {
+// parseResourceRecordWithContext parses a resource record (with full message context)
+func parseResourceRecordWithContext(data []byte, offset int, fullMsg []byte) (rr *ResourceRecord, newOffset int, err error) {
 	name, newOffset, err := parseName(data, offset)
 	if err != nil {
 		return nil, 0, err
@@ -246,7 +239,7 @@ func parseResourceRecordWithContext(data []byte, offset int, fullMsg []byte) (*R
 		return nil, 0, errors.New("invalid resource record format")
 	}
 
-	rr := &ResourceRecord{
+	rr = &ResourceRecord{
 		Name:  name,
 		Type:  binary.BigEndian.Uint16(data[newOffset : newOffset+2]),
 		Class: binary.BigEndian.Uint16(data[newOffset+2 : newOffset+4]),
@@ -257,15 +250,15 @@ func parseResourceRecordWithContext(data []byte, offset int, fullMsg []byte) (*R
 	rdataStart := newOffset + 10
 	rr.Rdata = make([]byte, rdlength)
 	copy(rr.Rdata, data[rdataStart:rdataStart+int(rdlength)])
-	
-	// 使用完整消息数据格式化 Rdata，支持压缩指针
+
+	// Use full message data to format Rdata, supporting compression pointers
 	rr.RdataStr = formatRdataWithContext(rr.Type, rr.Rdata, fullMsg, rdataStart)
 
 	return rr, rdataStart + int(rdlength), nil
 }
 
-// parseName 解析域名（支持压缩）
-func parseName(data []byte, offset int) (string, int, error) {
+// parseName parses a domain name (with compression support)
+func parseName(data []byte, offset int) (name string, newOffset int, err error) {
 	var labels []string
 	visited := make(map[int]bool)
 	jumped := false
@@ -278,7 +271,7 @@ func parseName(data []byte, offset int) (string, int, error) {
 
 		b := data[offset]
 
-		// 检查指针
+		// Check for pointer
 		if b&0xC0 == 0xC0 {
 			if offset+1 >= len(data) {
 				return "", 0, errors.New("invalid pointer")
@@ -291,7 +284,7 @@ func parseName(data []byte, offset int) (string, int, error) {
 			}
 			visited[pointer] = true
 
-			// 如果是第一次跳转，记录返回位置
+			// If this is the first jump, record return position
 			if !jumped {
 				returnOffset = offset + 2
 				jumped = true
@@ -305,7 +298,7 @@ func parseName(data []byte, offset int) (string, int, error) {
 			if len(labels) == 0 {
 				return ".", offset + 1, nil
 			}
-			offset++ // 跳过结束符
+			offset++ // Skip terminator
 			break
 		}
 
@@ -318,719 +311,292 @@ func parseName(data []byte, offset int) (string, int, error) {
 		offset += 1 + labelLen
 	}
 
-	// 如果跳转过，返回跳转前的位置；否则返回当前位置
+	// If jumped, return pre-jump position; otherwise return current position
 	if jumped {
 		return strings.Join(labels, ".") + ".", returnOffset, nil
 	}
 	return strings.Join(labels, ".") + ".", offset, nil
 }
 
-// formatRdata 格式化 Rdata 为字符串 (无消息上下文版本)
-
-func formatRdata(rrtype uint16, rdata []byte) string {
-
-	return formatRdataWithContext(rrtype, rdata, nil, 0)
-
-}
-
-
-
-// formatRdataWithMessage 格式化 Rdata 为字符串 (带消息上下文支持压缩指针)
-
-func formatRdataWithMessage(rrtype uint16, rdata []byte, fullMsg []byte) string {
-
-	return formatRdataWithContext(rrtype, rdata, fullMsg, 0)
-
-}
-
-
-
-// formatRdataWithContext 格式化 Rdata 为字符串 (完整版本)
-
-func formatRdataWithContext(rrtype uint16, rdata []byte, fullMsg []byte, rdataOffset int) string {
-
+// formatRdataWithContext formats Rdata to string (full version)
+func formatRdataWithContext(rrtype uint16, rdata, fullMsg []byte, rdataOffset int) string {
 	switch rrtype {
-
 	case TypeA:
-
-		if len(rdata) == 4 {
-
-			return net.IP(rdata).String()
-
-		}
-
+		return formatA(rdata)
 	case TypeAAAA:
-
-		if len(rdata) == 16 {
-
-			return net.IP(rdata).String()
-
-		}
-
+		return formatAAAA(rdata)
 	case TypeCNAME, TypeNS, TypePTR:
-
-		if len(rdata) > 0 {
-
-			// 如果有完整消息，尝试使用压缩指针解析
-
-			if fullMsg != nil && len(fullMsg) > 0 {
-
-				name, _, err := parseName(fullMsg, rdataOffset)
-
-				if err == nil && name != "." {
-
-					return name
-
-				}
-
-			}
-
-			// 回退到简单解析
-
-			name, _, err := parseNameSimple(rdata, 0)
-
-			if err == nil && name != "." {
-
-				return name
-
-			}
-
-		}
-
+		return formatNameRecord(rdata, fullMsg, rdataOffset)
 	case TypeMX:
-
-		if len(rdata) >= 3 {
-
-			priority := binary.BigEndian.Uint16(rdata[0:2])
-
-			if fullMsg != nil && len(fullMsg) > 0 {
-
-				name, _, err := parseName(fullMsg, rdataOffset+2)
-
-				if err == nil && name != "." {
-
-					return fmt.Sprintf("%d %s", priority, name)
-
-				}
-
-			}
-
-			name, _, _ := parseNameSimple(rdata, 2)
-
-			return fmt.Sprintf("%d %s", priority, name)
-
-		}
-
+		return formatMX(rdata, fullMsg, rdataOffset)
 	case TypeTXT:
+		return formatTXT(rdata)
+	case TypeHTTPS, TypeSVCB:
+		return formatSVCB(rdata, fullMsg, rdataOffset)
+	default:
+		return fmt.Sprintf("%x", rdata)
+	}
+}
 
-		var txts []string
+// formatA formats A record
+func formatA(rdata []byte) string {
+	if len(rdata) == 4 {
+		return net.IP(rdata).String()
+	}
+	return fmt.Sprintf("%x", rdata)
+}
 
-		for i := 0; i < len(rdata); {
+// formatAAAA formats AAAA record
+func formatAAAA(rdata []byte) string {
+	if len(rdata) == 16 {
+		return net.IP(rdata).String()
+	}
+	return fmt.Sprintf("%x", rdata)
+}
 
-			l := int(rdata[i])
-
-			if i+1+l > len(rdata) {
-
-				break
-
-			}
-
-			txts = append(txts, string(rdata[i+1:i+1+l]))
-
-			i += 1 + l
-
+// formatNameRecord formats CNAME/NS/PTR records
+func formatNameRecord(rdata, fullMsg []byte, rdataOffset int) string {
+	if len(rdata) == 0 {
+		return ""
+	}
+	// If we have full message, try parsing with compression pointer
+	if len(fullMsg) > 0 {
+		name, _, err := parseName(fullMsg, rdataOffset)
+		if err == nil && name != "." {
+			return name
 		}
+	}
+	// Fall back to simple parsing
+	name, _, err := parseNameSimple(rdata, 0)
+	if err == nil && name != "." {
+		return name
+	}
+	return ""
+}
 
-		return strings.Join(txts, " ")
+// formatMX formats MX record
+func formatMX(rdata, fullMsg []byte, rdataOffset int) string {
+	if len(rdata) < 3 {
+		return ""
+	}
+	priority := binary.BigEndian.Uint16(rdata[0:2])
+	if len(fullMsg) > 0 {
+		name, _, err := parseName(fullMsg, rdataOffset+2)
+		if err == nil && name != "." {
+			return fmt.Sprintf("%d %s", priority, name)
+		}
+	}
+	name, _, _ := parseNameSimple(rdata, 2)
+	return fmt.Sprintf("%d %s", priority, name)
+}
 
-						case TypeHTTPS, TypeSVCB:
+// formatTXT formats TXT record data
+func formatTXT(rdata []byte) string {
+	var txts []string
+	for i := 0; i < len(rdata); {
+		l := int(rdata[i])
+		if i+1+l > len(rdata) {
+			break
+		}
+		txts = append(txts, string(rdata[i+1:i+1+l]))
+		i += 1 + l
+	}
+	return strings.Join(txts, " ")
+}
 
-							// HTTPS/SVCB 记录格式: priority (2 bytes) + target name + params
-
-							// 尝试解析为友好格式
-
-							if len(rdata) >= 2 {
-
-								priority := binary.BigEndian.Uint16(rdata[0:2])
-
-								var target string
-
-								var paramsStart int
-
-								
-
-								if fullMsg != nil && len(fullMsg) > 0 {
-
-									name, endOffset, err := parseName(fullMsg, rdataOffset+2)
-
-									if err == nil {
-
-										target = name
-
-										// 计算参数起始位置相对于 rdata 的偏移
-
-										// endOffset 是完整消息中的位置，减去 rdataOffset 得到 RDATA 中的偏移
-
-										paramsStart = endOffset - rdataOffset
-
-									}
-
-								}
-
-								
-
-								if target == "" {
-
-									// 回退到简单解析
-
-									name, endOffset, _ := parseNameSimple(rdata, 2)
-
-									target = name
-
-									paramsStart = endOffset
-
-								}
-
-					
-
-					// 解析 SVCB 参数
-
-					if paramsStart < len(rdata) {
-
-						params := parseSVCBParams(rdata[paramsStart:])
-
-						if len(params) > 0 {
-
-							return fmt.Sprintf("%d %s %s", priority, target, strings.Join(params, " "))
-
-						}
-
-					}
-
-					return fmt.Sprintf("%d %s", priority, target)
-
-				}
-
-				// 返回空字符串，让 JSON 格式化器使用 RFC 8427 格式
-
-				return ""
-
+// formatSVCB formats HTTPS/SVCB record data
+func formatSVCB(rdata, fullMsg []byte, rdataOffset int) string {
+	// HTTPS/SVCB record format: priority (2 bytes) + target name + params
+	if len(rdata) < 2 {
+		return ""
 	}
 
-	return fmt.Sprintf("%x", rdata)
+	priority := binary.BigEndian.Uint16(rdata[0:2])
+	var target string
+	var paramsStart int
 
+	if len(fullMsg) > 0 {
+		name, endOffset, err := parseName(fullMsg, rdataOffset+2)
+		if err == nil {
+			target = name
+			// Calculate parameter start position relative to rdata
+			paramsStart = endOffset - rdataOffset
+		}
+	}
+
+	if target == "" {
+		// Fall back to simple parsing
+		name, endOffset, _ := parseNameSimple(rdata, 2)
+		target = name
+		paramsStart = endOffset
+	}
+
+	// Parse SVCB parameters
+	if paramsStart < len(rdata) {
+		params := parseSVCBParams(rdata[paramsStart:])
+		if len(params) > 0 {
+			return fmt.Sprintf("%d %s %s", priority, target, strings.Join(params, " "))
+		}
+	}
+	return fmt.Sprintf("%d %s", priority, target)
 }
 
-
-
-// parseNameSimple 简单域名解析 (处理 Rdata 中的域名)
-
-func parseNameSimple(data []byte, offset int) (string, int, error) {
-
+// parseNameSimple parses a domain name simply (handles domain names in Rdata)
+func parseNameSimple(data []byte, offset int) (name string, newOffset int, err error) {
 	var labels []string
 
-
-
-	for {
-
-		if offset >= len(data) {
-
-			break
-
-		}
-
-
-
+	for offset < len(data) {
 		b := data[offset]
 
-
-
-		// 处理结束符
-
+		// Handle terminator
 		if b == 0 {
-
 			offset++
-
 			break
-
 		}
 
-
-
-		// 检查压缩指针 (0xC0 = 192)
-
+		// Check for compression pointer (0xC0 = 192)
 		if b&0xC0 == 0xC0 {
-
-			// 压缩指针 - 在 Rdata 上下文中无法解析
-
-			// 跳过指针的两个字节
-
+			// Compression pointer - cannot parse in Rdata context
+			// Skip the two bytes of the pointer
 			offset += 2
-
 			break
-
 		}
-
-
 
 		labelLen := int(b)
-
 		if offset+1+labelLen > len(data) {
-
 			break
-
 		}
-
-
 
 		labels = append(labels, string(data[offset+1:offset+1+labelLen]))
-
 		offset += 1 + labelLen
-
 	}
 
+	if len(labels) == 0 {
+		return ".", offset, nil
+	}
 
+	return strings.Join(labels, ".") + ".", offset, nil
+}
 
-		if len(labels) == 0 {
+// parseSVCBParams parses SVCB/HTTPS record parameters
+func parseSVCBParams(data []byte) []string {
+	var params []string
+	offset := 0
 
+	// SVCB parameter format: 2-byte key + 2-byte length + value
+	svcParamKeys := map[uint16]string{
+		0: "mandatory",
+		1: "alpn",
+		2: "no-default-alpn",
+		3: "port",
+		4: "ipv4hint",
+		5: "ech",
+		6: "ipv6hint",
+	}
 
+	for offset+4 <= len(data) {
+		key := binary.BigEndian.Uint16(data[offset : offset+2])
+		length := binary.BigEndian.Uint16(data[offset+2 : offset+4])
+		offset += 4
 
-			return ".", offset, nil
-
-
-
+		if offset+int(length) > len(data) {
+			break
 		}
 
+		value := data[offset : offset+int(length)]
+		offset += int(length)
 
-
-		return strings.Join(labels, ".") + ".", offset, nil
-
-
-
-	}
-
-
-
-	
-
-
-
-	// parseSVCBParams 解析 SVCB/HTTPS 记录的参数
-
-
-
-	func parseSVCBParams(data []byte) []string {
-
-
-
-		var params []string
-
-
-
-		offset := 0
-
-
-
-	
-
-
-
-		// SVCB 参数格式: 2字节 key + 2字节 length + value
-
-
-
-		svcParamKeys := map[uint16]string{
-
-
-
-			0: "mandatory",
-
-
-
-			1: "alpn",
-
-
-
-			2: "no-default-alpn",
-
-
-
-			3: "port",
-
-
-
-			4: "ipv4hint",
-
-
-
-			5: "ech",
-
-
-
-			6: "ipv6hint",
-
-
-
+		keyName, ok := svcParamKeys[key]
+		if !ok {
+			keyName = fmt.Sprintf("key%d", key)
 		}
 
-
-
-	
-
-
-
-		for offset+4 <= len(data) {
-
-
-
-			key := binary.BigEndian.Uint16(data[offset : offset+2])
-
-
-
-			length := binary.BigEndian.Uint16(data[offset+2 : offset+4])
-
-
-
-			offset += 4
-
-
-
-	
-
-
-
-			if offset+int(length) > len(data) {
-
-
-
-				break
-
-
-
-			}
-
-
-
-	
-
-
-
-			value := data[offset : offset+int(length)]
-
-
-
-			offset += int(length)
-
-
-
-	
-
-
-
-			keyName, ok := svcParamKeys[key]
-
-
-
-			if !ok {
-
-
-
-				keyName = fmt.Sprintf("key%d", key)
-
-
-
-			}
-
-
-
-	
-
-
-
-			// 格式化值
-
-
-
-			var valueStr string
-
-
-
-			switch key {
-
-
-
-			case 0: // mandatory
-
-
-
-				// 列出必须的参数键
-
-
-
-				var mandatory []string
-
-
-
-				for i := 0; i+2 <= len(value); i += 2 {
-
-
-
-					mk := binary.BigEndian.Uint16(value[i : i+2])
-
-
-
-					if mn, ok := svcParamKeys[mk]; ok {
-
-
-
-						mandatory = append(mandatory, mn)
-
-
-
-					} else {
-
-
-
-						mandatory = append(mandatory, fmt.Sprintf("key%d", mk))
-
-
-
-					}
-
-
-
-				}
-
-
-
-				valueStr = strings.Join(mandatory, ",")
-
-
-
-			case 1: // alpn
-
-
-
-				// ALPN 协议列表
-
-
-
-				var alpns []string
-
-
-
-				for i := 0; i < len(value); {
-
-
-
-					if i >= len(value) {
-
-
-
-						break
-
-
-
-					}
-
-
-
-					l := int(value[i])
-
-
-
-					if i+1+l > len(value) {
-
-
-
-						break
-
-
-
-					}
-
-
-
-					alpns = append(alpns, string(value[i+1:i+1+l]))
-
-
-
-					i += 1 + l
-
-
-
-				}
-
-
-
-				valueStr = strings.Join(alpns, ",")
-
-
-
-			case 2: // no-default-alpn (无值)
-
-
-
-				valueStr = ""
-
-
-
-			case 3: // port
-
-
-
-				if len(value) >= 2 {
-
-
-
-					valueStr = fmt.Sprintf("%d", binary.BigEndian.Uint16(value[0:2]))
-
-
-
-				}
-
-
-
-			case 4: // ipv4hint
-
-
-
-				var ips []string
-
-
-
-				for i := 0; i+4 <= len(value); i += 4 {
-
-
-
-					ips = append(ips, net.IP(value[i:i+4]).String())
-
-
-
-				}
-
-
-
-				valueStr = strings.Join(ips, ",")
-
-
-
-			case 5: // ech
-
-
-
-				// ECH 配置，使用 Base64 编码
-
-
-
-				valueStr = base64.StdEncoding.EncodeToString(value)
-
-
-
-			case 6: // ipv6hint
-
-
-
-				var ips []string
-
-
-
-				for i := 0; i+16 <= len(value); i += 16 {
-
-
-
-					ips = append(ips, net.IP(value[i:i+16]).String())
-
-
-
-				}
-
-
-
-				valueStr = strings.Join(ips, ",")
-
-
-
-			default:
-
-
-
-				// 未知参数，使用十六进制
-
-
-
-				valueStr = fmt.Sprintf("%x", value)
-
-
-
-			}
-
-
-
-	
-
-
-
-			if key == 2 { // no-default-alpn 无值
-
-
-
-				params = append(params, keyName)
-
-
-
-			} else if valueStr != "" {
-
-
-
-				params = append(params, fmt.Sprintf("%s=%s", keyName, valueStr))
-
-
-
-			}
-
-
-
+		// Format value
+		valueStr := formatSVCBValue(key, value, svcParamKeys)
+
+		if key == 2 { // no-default-alpn has no value
+			params = append(params, keyName)
+		} else if valueStr != "" {
+			params = append(params, fmt.Sprintf("%s=%s", keyName, valueStr))
 		}
-
-
-
-	
-
-
-
-		return params
-
-
-
 	}
 
+	return params
+}
 
-
-	
-
-
-
-	// EncodeBase64URL Base64 URL 安全编码
-
-
-
-	func EncodeBase64URL(data []byte) string {
-
-
-
-		return base64.RawURLEncoding.EncodeToString(data)
-
-
-
+// formatSVCBValue formats SVCB parameter value
+func formatSVCBValue(key uint16, value []byte, svcParamKeys map[uint16]string) string {
+	switch key {
+	case 0: // mandatory
+		return formatMandatory(value, svcParamKeys)
+	case 1: // alpn
+		return formatALPN(value)
+	case 2: // no-default-alpn (no value)
+		return ""
+	case 3: // port
+		if len(value) >= 2 {
+			return fmt.Sprintf("%d", binary.BigEndian.Uint16(value[0:2]))
+		}
+	case 4: // ipv4hint
+		return formatIPHints(value, 4)
+	case 5: // ech
+		return base64.StdEncoding.EncodeToString(value)
+	case 6: // ipv6hint
+		return formatIPHints(value, 16)
+	default:
+		return fmt.Sprintf("%x", value)
 	}
+	return ""
+}
 
-// DecodeBase64URL Base64 URL 安全解码
+// formatMandatory formats mandatory parameter
+func formatMandatory(value []byte, svcParamKeys map[uint16]string) string {
+	var mandatory []string
+	for i := 0; i+2 <= len(value); i += 2 {
+		mk := binary.BigEndian.Uint16(value[i : i+2])
+		if mn, ok := svcParamKeys[mk]; ok {
+			mandatory = append(mandatory, mn)
+		} else {
+			mandatory = append(mandatory, fmt.Sprintf("key%d", mk))
+		}
+	}
+	return strings.Join(mandatory, ",")
+}
+
+// formatALPN formats ALPN protocol list
+func formatALPN(value []byte) string {
+	var alpns []string
+	for i := 0; i < len(value); {
+		l := int(value[i])
+		if i+1+l > len(value) {
+			break
+		}
+		alpns = append(alpns, string(value[i+1:i+1+l]))
+		i += 1 + l
+	}
+	return strings.Join(alpns, ",")
+}
+
+// formatIPHints formats IP hints
+func formatIPHints(value []byte, ipLen int) string {
+	var ips []string
+	for i := 0; i+ipLen <= len(value); i += ipLen {
+		ips = append(ips, net.IP(value[i:i+ipLen]).String())
+	}
+	return strings.Join(ips, ",")
+}
+
+// EncodeBase64URL Base64 URL-safe encodes data
+func EncodeBase64URL(data []byte) string {
+	return base64.RawURLEncoding.EncodeToString(data)
+}
+
+// DecodeBase64URL Base64 URL-safe decodes a string
 func DecodeBase64URL(s string) ([]byte, error) {
 	return base64.RawURLEncoding.DecodeString(s)
 }
 
-// ExtractQueryName 从 DNS 消息中提取查询域名
+// ExtractQueryName extracts query domain name from DNS message
 func ExtractQueryName(data []byte) (string, error) {
 	if len(data) < HeaderSize {
 		return "", errors.New("message too short")
@@ -1049,18 +615,17 @@ func ExtractQueryName(data []byte) (string, error) {
 	return name, nil
 }
 
-// ExtractQueryType 从 DNS 消息中提取查询类型
+// ExtractQueryType extracts query type from DNS message
 func ExtractQueryType(data []byte) (uint16, error) {
 	if len(data) < HeaderSize+4 {
 		return 0, errors.New("message too short")
 	}
 
-	name, offset, err := parseName(data, HeaderSize)
+	_, offset, err := parseName(data, HeaderSize)
 	if err != nil {
 		return 0, err
 	}
 
-	_ = name
 	if offset+2 > len(data) {
 		return 0, errors.New("invalid message")
 	}
@@ -1068,20 +633,37 @@ func ExtractQueryType(data []byte) (uint16, error) {
 	return binary.BigEndian.Uint16(data[offset : offset+2]), nil
 }
 
-// BuildQuery 构建 DNS 查询消息
+// BuildQuery builds a DNS query message
 func BuildQuery(name string, qtype uint16) ([]byte, error) {
 	return BuildQueryWithOptions(name, qtype, false, false)
 }
 
-// QueryOptions DNS 查询选项
+// QueryOptions DNS query options
 type QueryOptions struct {
-	CD bool // 禁用 DNSSEC 验证 (Checking Disabled)
-	DO bool // 包含 DNSSEC 记录 (DNSSEC OK)
+	CD bool // Disable DNSSEC validation (Checking Disabled)
+	DO bool // Include DNSSEC records (DNSSEC OK)
 }
 
-// BuildQueryWithOptions 构建 DNS 查询消息（支持选项）
+// BuildQueryWithOptions builds a DNS query message with options
 func BuildQueryWithOptions(name string, qtype uint16, cd, do bool) ([]byte, error) {
-	var buf []byte
+	// Calculate total size for preallocation
+	labels := strings.Split(strings.TrimSuffix(name, "."), ".")
+	questionLen := 0
+	for _, label := range labels {
+		if len(label) > 63 {
+			return nil, errors.New("label too long")
+		}
+		questionLen += 1 + len(label)
+	}
+	questionLen += 1 + 2 + 2 // terminator + type + class
+
+	edns0Len := 0
+	if do {
+		edns0Len = 11 // OPT record size
+	}
+
+	totalLen := 12 + questionLen + edns0Len
+	buf := make([]byte, 0, totalLen)
 
 	// Header (12 bytes)
 	buf = append(buf, 0x00, 0x01) // ID
@@ -1091,13 +673,9 @@ func BuildQueryWithOptions(name string, qtype uint16, cd, do bool) ([]byte, erro
 	if cd {
 		flags |= 0x0010 // Checking Disabled
 	}
-	buf = append(buf, byte(flags>>8), byte(flags))
+	buf = append(buf, byte(flags>>8), byte(flags), 0x00, 0x01, 0x00, 0x00, 0x00, 0x00)
 
-	buf = append(buf, 0x00, 0x01) // QDCOUNT
-	buf = append(buf, 0x00, 0x00) // ANCOUNT
-	buf = append(buf, 0x00, 0x00) // NSCOUNT
-
-	// ARCOUNT - 如果需要 DO 标志，添加 EDNS0 OPT 记录
+	// ARCOUNT
 	if do {
 		buf = append(buf, 0x00, 0x01) // ARCOUNT = 1
 	} else {
@@ -1105,35 +683,17 @@ func BuildQueryWithOptions(name string, qtype uint16, cd, do bool) ([]byte, erro
 	}
 
 	// Question
-	labels := strings.Split(strings.TrimSuffix(name, "."), ".")
 	for _, label := range labels {
-		if len(label) > 63 {
-			return nil, errors.New("label too long")
-		}
 		buf = append(buf, byte(len(label)))
-		buf = append(buf, []byte(label)...)
+		buf = append(buf, label...)
 	}
-	buf = append(buf, 0x00) // End of name
 
-	// Type
-	buf = append(buf, byte(qtype>>8), byte(qtype))
-	// Class (IN = 1)
-	buf = append(buf, 0x00, 0x01)
+	// End of name, Type and Class
+	buf = append(buf, 0x00, byte(qtype>>8), byte(qtype), 0x00, 0x01)
 
-	// EDNS0 OPT 记录（如果需要 DO 标志）
+	// EDNS0 OPT record (if DO flag needed)
 	if do {
-		// OPT 记录名称 (root)
-		buf = append(buf, 0x00)
-		// Type (OPT = 41)
-		buf = append(buf, 0x00, 0x29)
-		// UDP payload size (4096)
-		buf = append(buf, 0x10, 0x00)
-		// Extended RCODE and EDNS0 version (0)
-		buf = append(buf, 0x00, 0x00)
-		// Z field with DO bit set (0x8000)
-		buf = append(buf, 0x80, 0x00)
-		// RDATA length (0)
-		buf = append(buf, 0x00, 0x00)
+		buf = append(buf, 0x00, 0x00, 0x29, 0x10, 0x00, 0x00, 0x00, 0x80, 0x00, 0x00, 0x00)
 	}
 
 	return buf, nil

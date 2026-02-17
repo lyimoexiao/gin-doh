@@ -9,14 +9,14 @@ import (
 	"github.com/lyimoexiao/gin-doh/internal/proxy"
 )
 
-// DoTResolver DNS-over-TLS 解析器
+// DoTResolver is a DNS-over-TLS resolver
 type DoTResolver struct {
 	BaseResolver
 	serverName string
 	proxyMgr   *proxy.Manager
 }
 
-// NewDoTResolver 创建 DoT 解析器
+// NewDoTResolver creates a new DoT resolver
 func NewDoTResolver(address, serverName string, timeout time.Duration, proxyMgr *proxy.Manager) *DoTResolver {
 	return &DoTResolver{
 		BaseResolver: BaseResolver{
@@ -29,37 +29,37 @@ func NewDoTResolver(address, serverName string, timeout time.Duration, proxyMgr 
 	}
 }
 
-// Resolve 执行 DNS 解析
+// Resolve performs DNS resolution
 func (r *DoTResolver) Resolve(ctx context.Context, query []byte) ([]byte, error) {
 	var conn net.Conn
 	var err error
 
-	// 创建连接
+	// Create connection
 	dialer := &net.Dialer{Timeout: r.timeout}
 
 	if r.proxyMgr != nil && r.proxyMgr.Enabled() {
-		// 通过代理连接
+		// Connect through proxy
 		conn, err = r.proxyMgr.DialContext(ctx, "tcp", r.address)
 		if err != nil {
 			return nil, err
 		}
 	} else {
-		// 直接连接
+		// Direct connection
 		conn, err = dialer.DialContext(ctx, "tcp", r.address)
 		if err != nil {
 			return nil, err
 		}
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
-	// 设置超时
+	// Set timeout
 	deadline := time.Now().Add(r.timeout)
 	if dl, ok := ctx.Deadline(); ok && dl.Before(deadline) {
 		deadline = dl
 	}
-	conn.SetDeadline(deadline)
+	_ = conn.SetDeadline(deadline)
 
-	// TLS 握手
+	// TLS handshake
 	tlsConn := tls.Client(conn, &tls.Config{
 		ServerName:         r.serverName,
 		MinVersion:         tls.VersionTLS12,
@@ -70,25 +70,25 @@ func (r *DoTResolver) Resolve(ctx context.Context, query []byte) ([]byte, error)
 		return nil, err
 	}
 
-	// TCP DNS 消息需要 2 字节长度前缀
+	// TCP DNS messages need 2-byte length prefix
 	msg := make([]byte, 2+len(query))
 	msg[0] = byte(len(query) >> 8)
 	msg[1] = byte(len(query))
 	copy(msg[2:], query)
 
-	// 发送查询
+	// Send query
 	if _, err := tlsConn.Write(msg); err != nil {
 		return nil, err
 	}
 
-	// 读取长度前缀
+	// Read length prefix
 	lenBuf := make([]byte, 2)
 	if _, err := tlsConn.Read(lenBuf); err != nil {
 		return nil, err
 	}
 	respLen := int(lenBuf[0])<<8 | int(lenBuf[1])
 
-	// 读取响应
+	// Read response
 	resp := make([]byte, respLen)
 	if _, err := tlsConn.Read(resp); err != nil {
 		return nil, err
@@ -97,7 +97,7 @@ func (r *DoTResolver) Resolve(ctx context.Context, query []byte) ([]byte, error)
 	return resp, nil
 }
 
-// String 返回服务器描述
+// String returns server description
 func (r *DoTResolver) String() string {
 	return "dot://" + r.address + " (" + r.serverName + ")"
 }

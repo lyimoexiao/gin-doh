@@ -1,3 +1,4 @@
+// Package middleware provides HTTP middleware for the DoH server.
 package middleware
 
 import (
@@ -77,7 +78,7 @@ func CORSMiddleware() gin.HandlerFunc {
 }
 
 // RateLimitMiddleware rate limiting (placeholder)
-func RateLimitMiddleware(requestsPerSecond int, burst int) gin.HandlerFunc {
+func RateLimitMiddleware(_, _ int) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		c.Next()
 	}
