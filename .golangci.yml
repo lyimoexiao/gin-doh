@@ -34,10 +34,9 @@ linters:
         - opinionated
         - performance
         - style
-
-issues:
-  exclude:
-    - path: _test\.go
-      linters:
-        - dupl
-        - gocyclo
+  exclusions:
+    rules:
+      - path: _test\.go
+        linters:
+          - dupl
+          - gocyclo
