@@ -15,6 +15,11 @@ import (
 	"github.com/lyimoexiao/gin-doh/pkg/dns"
 )
 
+const (
+	// contentTypeDNSMessage is the MIME type for DNS wire format
+	contentTypeDNSMessage = "application/dns-message"
+)
+
 // DoHHandler handles DNS-over-HTTPS requests
 type DoHHandler struct {
 	selector     strategy.Selector
@@ -118,13 +123,13 @@ func (h *DoHHandler) Handle(c *gin.Context) {
 	}
 
 	// Return Wire Format
-	c.Data(http.StatusOK, "application/dns-message", response)
+	c.Data(http.StatusOK, contentTypeDNSMessage, response)
 }
 
 // parsePostRequest parses a POST request
 func (h *DoHHandler) parsePostRequest(c *gin.Context) ([]byte, error) {
 	contentType := c.GetHeader("Content-Type")
-	if contentType != "application/dns-message" {
+	if contentType != contentTypeDNSMessage {
 		return nil, ErrUnsupportedContentType
 	}
 
