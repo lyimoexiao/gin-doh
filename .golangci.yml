@@ -12,7 +12,6 @@ linters:
     - staticcheck
     - gosimple
     - ineffassign
-    - typecheck
     - gocyclo
     - dupl
     - misspell
