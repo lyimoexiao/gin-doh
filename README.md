@@ -467,51 +467,125 @@ server {
 
 No additional configuration needed. Cloudflare automatically adds `X-Forwarded-For` and `CF-Connecting-IP` headers. Just add Cloudflare IP ranges to `trusted_proxies`.
 
+## Architecture
+
+### Request Flow
+
+```mermaid
+flowchart TB
+    Client[Client] -->|HTTPS Request| LB[Load Balancer / Reverse Proxy]
+    LB -->|Forward Request| DoH[gin-doh Server]
+    
+    subgraph gin-doh
+        DoH --> MW[Middleware Stack]
+        MW -->|Real IP Extraction| RH[Request Handler]
+        RH -->|Parse DNS Query| SS[Strategy Selector]
+        
+        SS -->|Round-Robin| RR[Resolver Pool]
+        SS -->|Failover| FO[Priority Queue]
+        SS -->|Fastest| FT[Latency Tracker]
+        
+        RR --> UP[Upstream Resolvers]
+        FO --> UP
+        FT --> UP
+    end
+    
+    subgraph Upstream Resolvers
+        UP --> DOH[DoH Server]
+        UP --> DOT[DoT Server]
+        UP --> UDP[UDP DNS]
+        UP --> TCP[TCP DNS]
+    end
+    
+    DOH -->|DNS Response| RH
+    DOT -->|DNS Response| RH
+    UDP -->|DNS Response| RH
+    TCP -->|DNS Response| RH
+    
+    RH -->|Wire/JSON Format| Client
+```
+
+### Components
+
+```mermaid
+flowchart LR
+    subgraph Entry
+        A[HTTP Server] --> B[Middleware]
+        B --> C[Handler]
+    end
+    
+    subgraph Core
+        C --> D[DNS Parser]
+        D --> E[Strategy]
+        E --> F[Resolver Factory]
+    end
+    
+    subgraph Upstream
+        F --> G[DoH Client]
+        F --> H[DoT Client]
+        F --> I[UDP Client]
+        F --> J[TCP Client]
+    end
+    
+    subgraph Support
+        K[Config] --> A
+        K --> E
+        K --> F
+        L[Logger] --> B
+        L --> C
+        M[Proxy Manager] --> G
+        M --> H
+        N[ECH Config] --> G
+    end
+```
+
 ## Project Structure
 
 ```
 gin-doh/
 ├── cmd/
 │   └── server/
-│       └── main.go
+│       └── main.go              # Application entry point
 ├── internal/
 │   ├── config/
-│   │   └── config.go
+│   │   └── config.go            # Configuration loading and validation
 │   ├── ech/
-│   │   ├── ech.go
-│   │   ├── client.go
-│   │   └── server.go
+│   │   ├── ech.go               # ECH config parsing and serialization
+│   │   ├── client.go            # Client-side ECH for upstream connections
+│   │   └── server.go            # Server-side ECH configuration
 │   ├── handler/
-│   │   └── doh.go
+│   │   └── doh.go               # HTTP request handler for DNS queries
 │   ├── logger/
-│   │   └── zap.go
+│   │   └── zap.go               # Zap logger wrapper and DNS log formatter
 │   ├── middleware/
-│   │   └── logging.go
+│   │   └── logging.go           # HTTP middleware: logging, recovery, CORS, real IP
 │   ├── proxy/
-│   │   └── proxy.go
+│   │   └── proxy.go             # HTTP and SOCKS5 proxy dialers
 │   ├── strategy/
-│   │   ├── strategy.go
-│   │   ├── round_robin.go
-│   │   ├── failover.go
-│   │   └── fastest.go
+│   │   ├── strategy.go          # Strategy interface definition
+│   │   ├── round_robin.go       # Round-robin load balancing
+│   │   ├── failover.go          # Priority-based failover with health check
+│   │   └── fastest.go           # Latency-based server selection
 │   └── upstream/
-│       ├── doh.go
-│       ├── dot.go
-│       ├── resolver.go
-│       └── factory.go
+│       ├── doh.go               # DNS-over-HTTPS resolver
+│       ├── dot.go               # DNS-over-TLS resolver
+│       ├── resolver.go          # UDP and TCP DNS resolvers
+│       └── factory.go           # Resolver factory with ECH and proxy support
 ├── pkg/
 │   └── dns/
-│       ├── wire.go
-│       └── json.go
-├── config.yaml
-├── go.mod
-└── go.sum
+│       ├── wire.go              # DNS wire format parsing and building
+│       └── json.go              # DNS JSON format conversion
+├── config.yaml                  # Default configuration file
+├── Makefile                     # Build automation
+├── go.mod                       # Go module definition
+└── go.sum                       # Go module checksums
 ```
 
 ## Requirements
 
-- Go 1.21+
-- TLS certificate (for HTTPS)
+- **Go**: 1.25+ (uses latest Go features)
+- **TLS Certificate**: Required for HTTPS mode (self-signed or CA-issued)
+- **ECH Key Pair**: Optional, for Encrypted Client Hello support
 
 ## References
 
