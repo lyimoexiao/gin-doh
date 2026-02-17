@@ -145,13 +145,16 @@ func StringToType(s string) uint16 {
 
 	// Try parsing TYPExxx format
 	if len(upper) > 4 && upper[:4] == "TYPE" {
-		num, _ := strconv.Atoi(s[4:])
-		return uint16(num)
+		num, err := strconv.Atoi(s[4:])
+		if err == nil && num >= 0 && num <= 65535 {
+			return uint16(num)
+		}
+		return 0
 	}
 
 	// Try parsing pure number format (e.g., "65")
 	num, err := strconv.Atoi(s)
-	if err == nil && num > 0 {
+	if err == nil && num > 0 && num <= 65535 {
 		return uint16(num)
 	}
 
@@ -760,7 +763,7 @@ func parseECS(ecs string) ([]byte, error) {
 
 	ipStr := parts[0]
 	prefixLen, err := strconv.Atoi(parts[1])
-	if err != nil {
+	if err != nil || prefixLen < 0 || prefixLen > 255 {
 		return nil, errors.New("invalid prefix length")
 	}
 
