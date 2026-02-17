@@ -437,15 +437,77 @@ func formatRdataWithContext(rrtype uint16, rdata []byte, fullMsg []byte, rdataOf
 
 		return strings.Join(txts, " ")
 
-		case TypeHTTPS, TypeSVCB:
+						case TypeHTTPS, TypeSVCB:
 
-			// HTTPS/SVCB 记录格式: priority (2 bytes) + target name + params
+							// HTTPS/SVCB 记录格式: priority (2 bytes) + target name + params
 
-			// 对于 JSON 输出，我们让上层处理为 RFC 8427 格式
+							// 尝试解析为友好格式
 
-			// 这里返回空字符串，让 JSON 格式化器使用原始数据
+							if len(rdata) >= 2 {
 
-			return ""
+								priority := binary.BigEndian.Uint16(rdata[0:2])
+
+								var target string
+
+								var paramsStart int
+
+								
+
+								if fullMsg != nil && len(fullMsg) > 0 {
+
+									name, endOffset, err := parseName(fullMsg, rdataOffset+2)
+
+									if err == nil {
+
+										target = name
+
+										// 计算参数起始位置相对于 rdata 的偏移
+
+										// endOffset 是完整消息中的位置，减去 rdataOffset 得到 RDATA 中的偏移
+
+										paramsStart = endOffset - rdataOffset
+
+									}
+
+								}
+
+								
+
+								if target == "" {
+
+									// 回退到简单解析
+
+									name, endOffset, _ := parseNameSimple(rdata, 2)
+
+									target = name
+
+									paramsStart = endOffset
+
+								}
+
+					
+
+					// 解析 SVCB 参数
+
+					if paramsStart < len(rdata) {
+
+						params := parseSVCBParams(rdata[paramsStart:])
+
+						if len(params) > 0 {
+
+							return fmt.Sprintf("%d %s %s", priority, target, strings.Join(params, " "))
+
+						}
+
+					}
+
+					return fmt.Sprintf("%d %s", priority, target)
+
+				}
+
+				// 返回空字符串，让 JSON 格式化器使用 RFC 8427 格式
+
+				return ""
 
 	}
 
@@ -523,20 +585,439 @@ func parseNameSimple(data []byte, offset int) (string, int, error) {
 
 
 
-	if len(labels) == 0 {
+		if len(labels) == 0 {
 
-		return ".", offset, nil
+
+
+			return ".", offset, nil
+
+
+
+		}
+
+
+
+		return strings.Join(labels, ".") + ".", offset, nil
+
+
 
 	}
 
-	return strings.Join(labels, ".") + ".", offset, nil
 
-}
 
-// EncodeBase64URL Base64 URL 安全编码
-func EncodeBase64URL(data []byte) string {
-	return base64.RawURLEncoding.EncodeToString(data)
-}
+	
+
+
+
+	// parseSVCBParams 解析 SVCB/HTTPS 记录的参数
+
+
+
+	func parseSVCBParams(data []byte) []string {
+
+
+
+		var params []string
+
+
+
+		offset := 0
+
+
+
+	
+
+
+
+		// SVCB 参数格式: 2字节 key + 2字节 length + value
+
+
+
+		svcParamKeys := map[uint16]string{
+
+
+
+			0: "mandatory",
+
+
+
+			1: "alpn",
+
+
+
+			2: "no-default-alpn",
+
+
+
+			3: "port",
+
+
+
+			4: "ipv4hint",
+
+
+
+			5: "ech",
+
+
+
+			6: "ipv6hint",
+
+
+
+		}
+
+
+
+	
+
+
+
+		for offset+4 <= len(data) {
+
+
+
+			key := binary.BigEndian.Uint16(data[offset : offset+2])
+
+
+
+			length := binary.BigEndian.Uint16(data[offset+2 : offset+4])
+
+
+
+			offset += 4
+
+
+
+	
+
+
+
+			if offset+int(length) > len(data) {
+
+
+
+				break
+
+
+
+			}
+
+
+
+	
+
+
+
+			value := data[offset : offset+int(length)]
+
+
+
+			offset += int(length)
+
+
+
+	
+
+
+
+			keyName, ok := svcParamKeys[key]
+
+
+
+			if !ok {
+
+
+
+				keyName = fmt.Sprintf("key%d", key)
+
+
+
+			}
+
+
+
+	
+
+
+
+			// 格式化值
+
+
+
+			var valueStr string
+
+
+
+			switch key {
+
+
+
+			case 0: // mandatory
+
+
+
+				// 列出必须的参数键
+
+
+
+				var mandatory []string
+
+
+
+				for i := 0; i+2 <= len(value); i += 2 {
+
+
+
+					mk := binary.BigEndian.Uint16(value[i : i+2])
+
+
+
+					if mn, ok := svcParamKeys[mk]; ok {
+
+
+
+						mandatory = append(mandatory, mn)
+
+
+
+					} else {
+
+
+
+						mandatory = append(mandatory, fmt.Sprintf("key%d", mk))
+
+
+
+					}
+
+
+
+				}
+
+
+
+				valueStr = strings.Join(mandatory, ",")
+
+
+
+			case 1: // alpn
+
+
+
+				// ALPN 协议列表
+
+
+
+				var alpns []string
+
+
+
+				for i := 0; i < len(value); {
+
+
+
+					if i >= len(value) {
+
+
+
+						break
+
+
+
+					}
+
+
+
+					l := int(value[i])
+
+
+
+					if i+1+l > len(value) {
+
+
+
+						break
+
+
+
+					}
+
+
+
+					alpns = append(alpns, string(value[i+1:i+1+l]))
+
+
+
+					i += 1 + l
+
+
+
+				}
+
+
+
+				valueStr = strings.Join(alpns, ",")
+
+
+
+			case 2: // no-default-alpn (无值)
+
+
+
+				valueStr = ""
+
+
+
+			case 3: // port
+
+
+
+				if len(value) >= 2 {
+
+
+
+					valueStr = fmt.Sprintf("%d", binary.BigEndian.Uint16(value[0:2]))
+
+
+
+				}
+
+
+
+			case 4: // ipv4hint
+
+
+
+				var ips []string
+
+
+
+				for i := 0; i+4 <= len(value); i += 4 {
+
+
+
+					ips = append(ips, net.IP(value[i:i+4]).String())
+
+
+
+				}
+
+
+
+				valueStr = strings.Join(ips, ",")
+
+
+
+			case 5: // ech
+
+
+
+				// ECH 配置，使用 Base64 编码
+
+
+
+				valueStr = base64.StdEncoding.EncodeToString(value)
+
+
+
+			case 6: // ipv6hint
+
+
+
+				var ips []string
+
+
+
+				for i := 0; i+16 <= len(value); i += 16 {
+
+
+
+					ips = append(ips, net.IP(value[i:i+16]).String())
+
+
+
+				}
+
+
+
+				valueStr = strings.Join(ips, ",")
+
+
+
+			default:
+
+
+
+				// 未知参数，使用十六进制
+
+
+
+				valueStr = fmt.Sprintf("%x", value)
+
+
+
+			}
+
+
+
+	
+
+
+
+			if key == 2 { // no-default-alpn 无值
+
+
+
+				params = append(params, keyName)
+
+
+
+			} else if valueStr != "" {
+
+
+
+				params = append(params, fmt.Sprintf("%s=%s", keyName, valueStr))
+
+
+
+			}
+
+
+
+		}
+
+
+
+	
+
+
+
+		return params
+
+
+
+	}
+
+
+
+	
+
+
+
+	// EncodeBase64URL Base64 URL 安全编码
+
+
+
+	func EncodeBase64URL(data []byte) string {
+
+
+
+		return base64.RawURLEncoding.EncodeToString(data)
+
+
+
+	}
 
 // DecodeBase64URL Base64 URL 安全解码
 func DecodeBase64URL(s string) ([]byte, error) {

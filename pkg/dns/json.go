@@ -1,9 +1,9 @@
 package dns
 
 import (
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -69,15 +69,11 @@ func WireToJSON(data []byte) (*JSONResponse, error) {
 
 		// 格式化 data 字段
 		dataStr := a.RdataStr
-		// 对于未知类型或解析失败的情况，使用 RFC 8427 格式
-		if dataStr == "" || (a.Type != TypeA && a.Type != TypeAAAA && 
-			a.Type != TypeCNAME && a.Type != TypeMX && a.Type != TypeTXT &&
-			a.Type != TypeNS && a.Type != TypePTR && a.Type != TypeSOA &&
-			a.Type != TypeSRV && a.Type != TypeCAA) {
-			// 使用 RFC 8427 格式: \# <length> <hex-data>
-			if len(a.Rdata) > 0 && (dataStr == "" || dataStr == fmt.Sprintf("%x", a.Rdata)) {
-				dataStr = formatUnknownRdata(a.Rdata)
-			}
+		
+		// 如果解析成功且非空，直接使用
+		// 否则使用 RFC 8427 格式
+		if dataStr == "" {
+			dataStr = formatUnknownRdata(a.Rdata)
 		}
 
 		resp.Answer = append(resp.Answer, JSONAnswer{
@@ -96,7 +92,17 @@ func formatUnknownRdata(rdata []byte) string {
 	if len(rdata) == 0 {
 		return "\\# 0"
 	}
-	return fmt.Sprintf("\\# %d %s", len(rdata), hex.EncodeToString(rdata))
+	// 使用空格分隔的十六进制格式，与 Cloudflare 保持一致
+	return fmt.Sprintf("\\# %d %s", len(rdata), formatHexWithSpaces(rdata))
+}
+
+// formatHexWithSpaces 格式化十六进制并用空格分隔
+func formatHexWithSpaces(data []byte) string {
+	parts := make([]string, len(data))
+	for i, b := range data {
+		parts[i] = fmt.Sprintf("%02x", b)
+	}
+	return strings.Join(parts, " ")
 }
 
 // ToJSONBytes 转换为 JSON 字节

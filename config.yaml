@@ -73,17 +73,20 @@ upstream:
   # 上游服务器列表
   servers:
     # DoH 服务器 (支持 ECH)
+    # - protocol: doh
+    #   url: https://cloudflare-dns.com/dns-query
+    #   timeout: 10s
+    #   # ECH 客户端配置 (可选，覆盖全局配置)
+    #   ech:
+    #     enabled: true
+    #     config_list: ""   # ECH 配置列表 (Base64 或文件路径)
+    
     - protocol: doh
-      url: https://cloudflare-dns.com/dns-query
+      url: https://dns.google/dns-query
       timeout: 10s
-      # ECH 客户端配置 (可选，覆盖全局配置)
       ech:
         enabled: true
         config_list: ""   # ECH 配置列表 (Base64 或文件路径)
-    
-    # - protocol: doh
-    #   url: https://dns.google/dns-query
-    #   timeout: 10s
     
     # DoT 服务器
     # - protocol: dot
