@@ -173,8 +173,18 @@ func (h *DoHHandler) parseGetRequestWithInfo(c *gin.Context) (query []byte, quer
 	cd := c.Query("cd") == "true" || c.Query("cd") == "1"
 	do := c.Query("do") == "true" || c.Query("do") == "1"
 
+	// Get ECS parameter
+	ecs := c.Query("ecs")
+	if ecs == "" {
+		ecs = c.Query("subnet") // Alternative parameter name (like Google DoH)
+	}
+
 	// Build DNS query
-	query, err = dns.BuildQueryWithOptions(name, qtype, cd, do)
+	query, err = dns.BuildQueryWithOpts(name, qtype, dns.QueryOptions{
+		CD:  cd,
+		DO:  do,
+		ECS: ecs,
+	})
 	if err != nil {
 		return nil, "", "", err
 	}

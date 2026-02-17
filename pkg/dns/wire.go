@@ -28,6 +28,7 @@ const (
 	TypeCAA   = 257
 	TypeHTTPS = 65 // HTTPS SVCB record (RFC 9460)
 	TypeSVCB  = 64 // SVCB record (RFC 9460)
+	TypeOPT   = 41 // EDNS0 OPT record
 
 	// DNS response codes
 	RcodeNoError  = 0
@@ -36,6 +37,12 @@ const (
 	RcodeNXDomain = 3
 	RcodeNotImp   = 4
 	RcodeRefused  = 5
+
+	// EDNS0 option codes
+	EDNS0OptionECS = 8 // EDNS Client Subnet (RFC 7871)
+
+	// EDNS0 constants
+	EDNS0UDPSize = 4096
 )
 
 // Header is a DNS message header
@@ -640,12 +647,18 @@ func BuildQuery(name string, qtype uint16) ([]byte, error) {
 
 // QueryOptions DNS query options
 type QueryOptions struct {
-	CD bool // Disable DNSSEC validation (Checking Disabled)
-	DO bool // Include DNSSEC records (DNSSEC OK)
+	CD  bool   // Disable DNSSEC validation (Checking Disabled)
+	DO  bool   // Include DNSSEC records (DNSSEC OK)
+	ECS string // EDNS Client Subnet (e.g., "116.153.81.41/24")
 }
 
-// BuildQueryWithOptions builds a DNS query message with options
+// BuildQueryWithOptions builds a DNS query message with options (legacy signature)
 func BuildQueryWithOptions(name string, qtype uint16, cd, do bool) ([]byte, error) {
+	return BuildQueryWithOpts(name, qtype, QueryOptions{CD: cd, DO: do})
+}
+
+// BuildQueryWithOpts builds a DNS query message with QueryOptions
+func BuildQueryWithOpts(name string, qtype uint16, opts QueryOptions) ([]byte, error) {
 	// Calculate total size for preallocation
 	labels := strings.Split(strings.TrimSuffix(name, "."), ".")
 	questionLen := 0
@@ -657,9 +670,20 @@ func BuildQueryWithOptions(name string, qtype uint16, cd, do bool) ([]byte, erro
 	}
 	questionLen += 1 + 2 + 2 // terminator + type + class
 
+	// Calculate EDNS0 size
 	edns0Len := 0
-	if do {
-		edns0Len = 11 // OPT record size
+	needEDNS := opts.DO || opts.ECS != ""
+
+	if needEDNS {
+		edns0Len = 11 // Base OPT record size
+		if opts.ECS != "" {
+			// ECS option: 2 bytes code + 2 bytes length + ECS data
+			ecsData, err := parseECS(opts.ECS)
+			if err != nil {
+				return nil, fmt.Errorf("invalid ECS: %w", err)
+			}
+			edns0Len += 4 + len(ecsData) // option code + length + data
+		}
 	}
 
 	totalLen := 12 + questionLen + edns0Len
@@ -670,13 +694,13 @@ func BuildQueryWithOptions(name string, qtype uint16, cd, do bool) ([]byte, erro
 
 	// Flags
 	flags := uint16(0x0100) // Recursion Desired
-	if cd {
+	if opts.CD {
 		flags |= 0x0010 // Checking Disabled
 	}
 	buf = append(buf, byte(flags>>8), byte(flags), 0x00, 0x01, 0x00, 0x00, 0x00, 0x00)
 
 	// ARCOUNT
-	if do {
+	if needEDNS {
 		buf = append(buf, 0x00, 0x01) // ARCOUNT = 1
 	} else {
 		buf = append(buf, 0x00, 0x00) // ARCOUNT = 0
@@ -691,10 +715,103 @@ func BuildQueryWithOptions(name string, qtype uint16, cd, do bool) ([]byte, erro
 	// End of name, Type and Class
 	buf = append(buf, 0x00, byte(qtype>>8), byte(qtype), 0x00, 0x01)
 
-	// EDNS0 OPT record (if DO flag needed)
-	if do {
-		buf = append(buf, 0x00, 0x00, 0x29, 0x10, 0x00, 0x00, 0x00, 0x80, 0x00, 0x00, 0x00)
+	// EDNS0 OPT record
+	if needEDNS {
+		// Calculate total RDATA length
+		rdataLen := 0
+		if opts.DO {
+			rdataLen += 4 // DO flag is in TTL, but we need to include options
+		}
+		if opts.ECS != "" {
+			ecsData, _ := parseECS(opts.ECS)
+			rdataLen += 4 + len(ecsData) // option code + length + data
+		}
+
+		// OPT record name (root)
+		buf = append(buf, 0x00)
+		// OPT type
+		buf = append(buf, 0x00, 0x29) // Type OPT (41)
+		// UDP payload size
+		buf = append(buf, 0x10, 0x00) // 4096
+		// Extended RCODE and flags (DO flag in high bit)
+		if opts.DO {
+			buf = append(buf, 0x00, 0x00, 0x80, 0x00) // DO flag set
+		} else {
+			buf = append(buf, 0x00, 0x00, 0x00, 0x00)
+		}
+		// RDATA length
+		buf = append(buf, byte(rdataLen>>8), byte(rdataLen))
+
+		// Add ECS option if provided
+		if opts.ECS != "" {
+			ecsData, _ := parseECS(opts.ECS)
+			// Option code (ECS = 8)
+			buf = append(buf, 0x00, 0x08)
+			// Option length
+			buf = append(buf, byte(len(ecsData)>>8), byte(len(ecsData)))
+			// Option data
+			buf = append(buf, ecsData...)
+		}
 	}
 
 	return buf, nil
+}
+
+// parseECS parses ECS string like "116.153.81.41/24" and returns ECS option data
+// Format: FAMILY (2 bytes) + SOURCE PREFIX-LENGTH (1 byte) + SCOPE PREFIX-LENGTH (1 byte) + ADDRESS (variable)
+func parseECS(ecs string) ([]byte, error) {
+	parts := strings.Split(ecs, "/")
+	if len(parts) != 2 {
+		return nil, errors.New("invalid ECS format, expected IP/PREFIX")
+	}
+
+	ipStr := parts[0]
+	prefixLen, err := strconv.Atoi(parts[1])
+	if err != nil {
+		return nil, errors.New("invalid prefix length")
+	}
+
+	ip := net.ParseIP(ipStr)
+	if ip == nil {
+		return nil, errors.New("invalid IP address")
+	}
+
+	var family uint16
+	var addrBytes []byte
+
+	if ip.To4() != nil {
+		// IPv4
+		family = 1
+		addrBytes = ip.To4()
+		if prefixLen < 0 || prefixLen > 32 {
+			return nil, errors.New("IPv4 prefix length must be 0-32")
+		}
+	} else {
+		// IPv6
+		family = 2
+		addrBytes = ip.To16()
+		if prefixLen < 0 || prefixLen > 128 {
+			return nil, errors.New("IPv6 prefix length must be 0-128")
+		}
+	}
+
+	// Calculate how many address bytes to include
+	// Round up to next byte boundary
+	addrLen := (prefixLen + 7) / 8
+	if addrLen > len(addrBytes) {
+		addrLen = len(addrBytes)
+	}
+
+	// Build ECS option data
+	result := make([]byte, 0, 4+addrLen)
+	// Family (2 bytes, big-endian)
+	result = append(result, byte(family>>8), byte(family))
+	// Source prefix length (1 byte)
+	result = append(result, byte(prefixLen))
+	// Scope prefix length (1 byte) - always 0 for queries
+	result = append(result, 0x00)
+	// Address (truncated to prefix bytes)
+	result = append(result, addrBytes[:addrLen]...)
+
+	return result, nil
 }

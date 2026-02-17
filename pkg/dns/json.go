@@ -126,8 +126,9 @@ func IsAcceptWireFormat(accept string) bool {
 type QueryParams struct {
 	Name string
 	Type string
-	CD   bool // Disable DNSSEC
-	DO   bool // Include DNSSEC records
+	CD   bool   // Disable DNSSEC
+	DO   bool   // Include DNSSEC records
+	ECS  string // EDNS Client Subnet
 }
 
 // JSONResponseFromError creates a JSON response from an error
