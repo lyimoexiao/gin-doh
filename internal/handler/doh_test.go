@@ -435,7 +435,7 @@ func TestHandleSuccessReport(t *testing.T) {
 
 // TestErrorDefinitions tests error definitions
 func TestErrorDefinitions(t *testing.T) {
-	errors := []error{
+	testErrors := []error{
 		ErrQueryEmpty,
 		ErrQueryTooLarge,
 		ErrUnsupportedContentType,
@@ -443,7 +443,7 @@ func TestErrorDefinitions(t *testing.T) {
 		ErrNameRequired,
 	}
 
-	for _, err := range errors {
+	for _, err := range testErrors {
 		if err == nil {
 			t.Error("Error should not be nil")
 		}
