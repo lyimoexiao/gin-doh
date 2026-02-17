@@ -127,7 +127,8 @@ func TypeToString(t uint16) string {
 
 // StringToType 字符串转类型
 func StringToType(s string) uint16 {
-	switch strings.ToUpper(s) {
+	upper := strings.ToUpper(s)
+	switch upper {
 	case "A":
 		return TypeA
 	case "AAAA":
@@ -154,9 +155,14 @@ func StringToType(s string) uint16 {
 		return TypeSVCB
 	default:
 		// 尝试解析 TYPExxx 格式
-		if len(s) > 4 && strings.ToUpper(s[:4]) == "TYPE" {
+		if len(upper) > 4 && upper[:4] == "TYPE" {
 			var num uint16
 			fmt.Sscanf(s[4:], "%d", &num)
+			return num
+		}
+		// 尝试解析纯数字格式 (如 "65")
+		var num uint16
+		if n, _ := fmt.Sscanf(s, "%d", &num); n == 1 && num > 0 {
 			return num
 		}
 		return 0
