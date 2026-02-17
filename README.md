@@ -100,6 +100,95 @@ services:
 - Runs as non-root user
 - Includes health check
 
+### Systemd Service
+
+For Linux systems, you can run gin-doh as a systemd service:
+
+**1. Create service file `/etc/systemd/system/gin-doh.service`:**
+
+```ini
+[Unit]
+Description=gin-doh DNS-over-HTTPS Server
+Documentation=https://github.com/lyimoexiao/gin-doh
+After=network.target network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+Group=root
+WorkingDirectory=/opt/gin-doh
+ExecStart=/opt/gin-doh/gin-doh -config /opt/gin-doh/config.yaml
+ExecReload=/bin/kill -HUP $MAINPID
+Restart=on-failure
+RestartSec=5s
+LimitNOFILE=65535
+LimitNPROC=4096
+
+# Security hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectControlGroups=true
+ReadWritePaths=/opt/gin-doh
+
+# Environment
+Environment=GIN_MODE=release
+
+[Install]
+WantedBy=multi-user.target
+```
+
+**2. Install and enable:**
+
+```bash
+# Create directory
+sudo mkdir -p /opt/gin-doh
+
+# Copy binary and config
+sudo cp gin-doh /opt/gin-doh/
+sudo cp config.yaml /opt/gin-doh/
+
+# Set permissions
+sudo chmod +x /opt/gin-doh/gin-doh
+
+# Enable and start service
+sudo systemctl daemon-reload
+sudo systemctl enable gin-doh
+sudo systemctl start gin-doh
+
+# Check status
+sudo systemctl status gin-doh
+
+# View logs
+sudo journalctl -u gin-doh -f
+```
+
+**3. Management commands:**
+
+```bash
+# Start
+sudo systemctl start gin-doh
+
+# Stop
+sudo systemctl stop gin-doh
+
+# Restart
+sudo systemctl restart gin-doh
+
+# Reload config (send HUP signal)
+sudo systemctl reload gin-doh
+
+# View status
+sudo systemctl status gin-doh
+
+# View logs
+sudo journalctl -u gin-doh --since today
+```
+
 ### Build from Source
 
 ```bash
