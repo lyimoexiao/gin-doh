@@ -24,65 +24,65 @@ import (
 )
 
 var (
-	configPath = flag.String("config", "config.yaml", "配置文件路径")
+	configPath = flag.String("config", "config.yaml", "path to configuration file")
 	version    = "dev"
 )
 
 func main() {
 	flag.Parse()
 
-	// 加载配置
+	// Load configuration
 	cfg, err := config.Load(*configPath)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "加载配置失败: %v\n", err)
+		fmt.Fprintf(os.Stderr, "Failed to load config: %v\n", err)
 		os.Exit(1)
 	}
 
-	// 初始化日志
+	// Initialize logger
 	log, err := logger.New(&logger.Config{
 		Level:  cfg.Logging.Level,
 		Format: cfg.Logging.Format,
 		Fields: cfg.Logging.Fields,
 	})
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "初始化日志失败: %v\n", err)
+		fmt.Fprintf(os.Stderr, "Failed to initialize logger: %v\n", err)
 		os.Exit(1)
 	}
 	defer log.Sync()
 
-	log.Infof("gin-doh %s 启动中...", version)
+	log.Infof("gin-doh %s starting...", version)
 
-	// 初始化全局代理
+	// Initialize global proxy
 	var globalProxy *proxy.Manager
 	if cfg.Upstream.Proxy != nil && cfg.Upstream.Proxy.Enabled {
 		globalProxy, err = proxy.NewManager(cfg.Upstream.Proxy)
 		if err != nil {
-			log.Fatalf("初始化代理失败: %v", err)
+			log.Fatalf("Failed to initialize proxy: %v", err)
 		}
-		log.Infof("全局代理已启用: %s", cfg.Upstream.Proxy.Address)
+		log.Infof("Global proxy enabled: %s", cfg.Upstream.Proxy.Address)
 	}
 
-	// 初始化全局 ECH 客户端配置 (用于连接上游 DoH 服务器)
+	// Initialize global ECH client config (for upstream DoH connections)
 	var globalECHConfig *ech.ClientECHConfig
 	echConfigAvailable := false
 	if cfg.Server.TLS.ECH.ConfigListFile != "" {
 		globalECHConfig = ech.NewClientECHConfig()
 		if err := globalECHConfig.LoadConfigListFromFile(cfg.Server.TLS.ECH.ConfigListFile); err != nil {
-			log.Warnf("加载全局 ECH 配置失败: %v", err)
+			log.Warnf("Failed to load global ECH config: %v", err)
 			globalECHConfig = nil
 		} else {
-			log.Info("全局 ECH 客户端配置已加载")
+			log.Info("Global ECH client config loaded")
 			echConfigAvailable = true
 		}
 	}
 
-	// 确定是否强制使用加密上游
+	// Determine if encrypted upstream is forced
 	forceEncrypted := cfg.Server.TLS.ECH.Enabled && cfg.Server.TLS.ECH.ForceEncryptedUpstream
 	if forceEncrypted {
-		log.Info("ECH 模式已启用，强制使用加密上游 (DoH/DoT)")
+		log.Info("ECH mode enabled, forcing encrypted upstream (DoH/DoT)")
 	}
 
-	// 创建解析器
+	// Create resolvers
 	factory := upstream.NewFactory(globalProxy,
 		upstream.WithForceEncrypted(forceEncrypted),
 		upstream.WithECHAvailable(echConfigAvailable),
@@ -93,19 +93,19 @@ func main() {
 	for _, serverCfg := range cfg.Upstream.Servers {
 		resolver, err := factory.CreateResolverWithECH(&serverCfg, globalECHConfig)
 		if err != nil {
-			log.Warnf("创建解析器失败 %s://%s: %v", serverCfg.Protocol, serverCfg.Address, err)
+			log.Warnf("Failed to create resolver %s://%s: %v", serverCfg.Protocol, serverCfg.Address, err)
 			continue
 		}
 		resolvers = append(resolvers, resolver)
 		priorities = append(priorities, serverCfg.Priority)
-		log.Infof("上游解析器: %s", resolver.String())
+		log.Infof("Upstream resolver: %s", resolver.String())
 	}
 
 	if len(resolvers) == 0 {
-		log.Fatal("没有可用的上游解析器")
+		log.Fatal("No upstream resolvers available")
 	}
 
-	// 创建选择策略
+	// Create selector strategy
 	var selector strategy.Selector
 	switch cfg.Upstream.Strategy {
 	case "round-robin":
@@ -117,37 +117,37 @@ func main() {
 	default:
 		selector = strategy.NewRoundRobinSelector(resolvers)
 	}
-	log.Infof("上游策略: %s", selector.Name())
+	log.Infof("Upstream strategy: %s", selector.Name())
 
-	// 创建 DoH 处理器
+	// Create DoH handler
 	dohHandler := handler.NewDoHHandler(selector, log, cfg.Server.RateLimit.MaxQuerySize)
 
-	// 设置 Gin 模式
+	// Set Gin mode
 	if cfg.Logging.Level == "debug" {
 		gin.SetMode(gin.DebugMode)
 	} else {
 		gin.SetMode(gin.ReleaseMode)
 	}
 
-	// 创建路由
+	// Create router
 	router := gin.New()
 	router.Use(middleware.RecoveryMiddleware(log))
 	router.Use(middleware.LoggingMiddleware(log))
 	router.Use(middleware.CORSMiddleware())
 
-	// 注册 DNS 查询路径
+	// Register DNS query paths
 	for _, path := range cfg.Server.DNSPaths {
 		if path.Enabled {
 			router.POST(path.Path, dohHandler.Handle)
 			router.GET(path.Path, dohHandler.Handle)
-			log.Infof("注册 DoH 路径: %s", path.Path)
+			log.Infof("Registered DoH path: %s", path.Path)
 		}
 	}
 
-	// 健康检查
+	// Health check endpoint
 	router.GET("/health", dohHandler.HandleHealthCheck)
 
-	// 创建 HTTP 服务器
+	// Create HTTP server
 	srv := &http.Server{
 		Addr:         cfg.Server.Listen,
 		Handler:      router,
@@ -156,95 +156,95 @@ func main() {
 		IdleTimeout:  60 * time.Second,
 	}
 
-	// 启动服务器
+	// Start server
 	go func() {
 		var err error
 		if cfg.Server.TLS.Enabled {
-			// 配置 TLS
+			// Configure TLS
 			tlsConfig := &tls.Config{
 				MinVersion: tls.VersionTLS12,
 				NextProtos: []string{"h2", "http/1.1"},
 			}
 
-			// 加载证书
+			// Load certificate
 			cert, err := tls.LoadX509KeyPair(cfg.Server.TLS.CertFile, cfg.Server.TLS.KeyFile)
 			if err != nil {
-				log.Fatalf("加载证书失败: %v", err)
+				log.Fatalf("Failed to load certificate: %v", err)
 			}
 			tlsConfig.Certificates = []tls.Certificate{cert}
 
-			// 配置服务端 ECH
+			// Configure server-side ECH
 			if cfg.Server.TLS.ECH.Enabled {
 				serverECH, err := setupServerECH(&cfg.Server.TLS.ECH, log)
 				if err != nil {
-					log.Warnf("配置 ECH 失败: %v", err)
+					log.Warnf("Failed to configure ECH: %v", err)
 				} else if serverECH != nil {
 					tlsConfig, err = serverECH.GetTLSConfig(tlsConfig)
 					if err != nil {
-						log.Warnf("应用 ECH 配置失败: %v", err)
+						log.Warnf("Failed to apply ECH config: %v", err)
 					} else {
-						log.Info("服务端 ECH 已启用")
+						log.Info("Server-side ECH enabled")
 					}
 				}
 			}
 
 			srv.TLSConfig = tlsConfig
-			log.Infof("HTTPS 服务器启动，监听 %s", cfg.Server.Listen)
-			err = srv.ListenAndServeTLS("", "") // 证书已在 TLSConfig 中配置
+			log.Infof("HTTPS server started, listening on %s", cfg.Server.Listen)
+			err = srv.ListenAndServeTLS("", "") // Certificate already configured in TLSConfig
 		} else {
-			log.Infof("HTTP 服务器启动，监听 %s", cfg.Server.Listen)
+			log.Infof("HTTP server started, listening on %s", cfg.Server.Listen)
 			err = srv.ListenAndServe()
 		}
 
 		if err != nil && err != http.ErrServerClosed {
-			log.Fatalf("服务器启动失败: %v", err)
+			log.Fatalf("Server startup failed: %v", err)
 		}
 	}()
 
-	// 优雅关闭
+	// Graceful shutdown
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 	<-quit
 
-	log.Info("正在关闭服务器...")
+	log.Info("Shutting down server...")
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
 	if err := srv.Shutdown(ctx); err != nil {
-		log.Errorf("服务器关闭错误: %v", err)
+		log.Errorf("Server shutdown error: %v", err)
 	}
 
-	log.Info("服务器已关闭")
+	log.Info("Server stopped")
 }
 
-// setupServerECH 配置服务端 ECH
+// setupServerECH configures server-side ECH
 func setupServerECH(cfg *config.ECHConfig, log *logger.Logger) (*ech.ServerECHConfig, error) {
 	serverECH := ech.NewServerECHConfig(cfg.PublicName)
 
-	// 如果有配置文件，直接加载
+	// Load from config file if provided
 	if cfg.ConfigFile != "" {
 		if err := serverECH.LoadConfigListFromFile(cfg.ConfigFile); err != nil {
-			return nil, fmt.Errorf("加载 ECH 配置文件失败: %w", err)
+			return nil, fmt.Errorf("failed to load ECH config file: %w", err)
 		}
 	}
 
-	// 如果有私钥文件，加载私钥
+	// Load private key if provided
 	if cfg.KeyFile != "" {
-		// 尝试加载私钥 (假设配置 ID 为 0)
+		// Try to load private key (assuming config ID 0)
 		key, err := ech.LoadPrivateKey(cfg.KeyFile, 0)
 		if err != nil {
-			return nil, fmt.Errorf("加载 ECH 私钥失败: %w", err)
+			return nil, fmt.Errorf("failed to load ECH private key: %w", err)
 		}
 		if err := serverECH.AddKey(key); err != nil {
-			return nil, fmt.Errorf("添加 ECH 密钥失败: %w", err)
+			return nil, fmt.Errorf("failed to add ECH key: %w", err)
 		}
 	}
 
-	// 如果有重试配置文件
+	// Load retry config if provided
 	if cfg.RetryConfigFile != "" {
 		if err := serverECH.LoadRetryConfigFromFile(cfg.RetryConfigFile); err != nil {
-			log.Warnf("加载 ECH 重试配置失败: %v", err)
+			log.Warnf("Failed to load ECH retry config: %v", err)
 		}
 	}
 

@@ -1,94 +1,91 @@
-# gin-doh 配置示例
-# DoH 服务器配置
+# gin-doh Configuration Example
+# DNS-over-HTTPS Server Configuration
 
 server:
   listen: ":8080"
   
-  # TLS 配置
+  # TLS Configuration
   tls:
     enabled: false
     cert_file: /path/to/cert.pem
     key_file: /path/to/key.pem
     
-    # ECH (Encrypted Client Hello) 配置
+    # ECH (Encrypted Client Hello) Configuration
     ech:
-      # 服务端 ECH 配置
-      enabled: false                    # 是否启用 ECH
-      config_file: /path/to/ech-config.list    # ECH 配置列表文件 (发送给客户端)
-      key_file: /path/to/ech-key.pem           # ECH 私钥文件
-      public_name: dns.example.com             # 公共名称 (用于 ECH)
-      retry_config_file: /path/to/ech-retry.list # ECH 重试配置文件 (可选)
+      # Server-side ECH configuration
+      enabled: false                    # Enable ECH
+      config_file: /path/to/ech-config.list    # ECH config list file (sent to clients)
+      key_file: /path/to/ech-key.pem           # ECH private key file
+      public_name: dns.example.com             # Public name (for ECH)
+      retry_config_file: /path/to/ech-retry.list # ECH retry config file (optional)
       
-      # 客户端 ECH 配置 (用于连接上游 DoH 服务器)
-      config_list_file: /path/to/upstream-ech.list # 上游 ECH 配置列表
+      # Client-side ECH configuration (for connecting to upstream DoH servers)
+      config_list_file: /path/to/upstream-ech.list # Upstream ECH config list
   
-  # HTTP/2 配置
+  # HTTP/2 Configuration
   http2:
     enabled: true
   
-  # HTTP/3 配置
+  # HTTP/3 Configuration
   http3:
     enabled: false
   
-  # DNS 查询路径
+  # DNS query paths
   dns_paths:
     - path: /dns-query
       enabled: true
     - path: /resolve
       enabled: true
   
-  # 速率限制
+  # Rate limiting
   rate_limit:
     enabled: false
     requests_per: 100
     burst: 200
     max_query_size: 65535
 
-# 上游 DNS 服务器配置
+# Upstream DNS Server Configuration
 upstream:
-  # 选择策略: round-robin, failover, fastest
+  # Selection strategy: round-robin, failover, fastest
   strategy: round-robin
   
-  # 健康检查 (用于 failover 模式)
+  # Health check (for failover mode)
   health_check:
     enabled: true
     interval: 30s
     failure_threshold: 3
     recovery_threshold: 2
   
-  # 最快响应配置 (用于 fastest 模式)
+  # Fastest response config (for fastest mode)
   fastest_config:
     window_size: 100
     min_samples: 10
     cooldown: 60s
   
-  # 全局代理配置 (可选)
+  # Global proxy configuration (optional)
   proxy:
     enabled: false
-    type: socks5          # http 或 socks5
+    type: socks5          # http or socks5
     address: 127.0.0.1:1080
     # username: user
     # password: pass
   
-  # 上游服务器列表
+  # Upstream server list
   servers:
-    # DoH 服务器 (支持 ECH)
+    # DoH server (with ECH support)
     # - protocol: doh
     #   url: https://cloudflare-dns.com/dns-query
     #   timeout: 10s
-    #   # ECH 客户端配置 (可选，覆盖全局配置)
+    #   # ECH client configuration (optional, overrides global config)
     #   ech:
     #     enabled: true
-    #     config_list: ""   # ECH 配置列表 (Base64 或文件路径)
+    #     config_list: ""   # ECH config list (Base64 or file path)
     
     - protocol: doh
       url: https://dns.google/dns-query
       timeout: 10s
-      ech:
-        enabled: true
-        config_list: ""   # ECH 配置列表 (Base64 或文件路径)
     
-    # DoT 服务器
+    # DoT server
     # - protocol: dot
     #   address: 1.1.1.1:853
     #   server_name: cloudflare-dns.com
@@ -108,13 +105,13 @@ upstream:
     #   address: 8.8.8.8:53
     #   timeout: 5s
 
-# 日志配置
+# Logging Configuration
 logging:
   level: info              # debug, info, warn, error
-  format: json             # json 或 console
+  format: json             # json or console
   output: stdout
   
-  # 日志字段
+  # Log fields
   fields:
     - timestamp
     - client_ip
