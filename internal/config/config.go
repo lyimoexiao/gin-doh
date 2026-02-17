@@ -16,12 +16,13 @@ type Config struct {
 
 // ServerConfig 服务器配置
 type ServerConfig struct {
-	Listen    string       `yaml:"listen"`
-	TLS       TLSConfig    `yaml:"tls"`
-	HTTP2     HTTP2Config  `yaml:"http2"`
-	HTTP3     HTTP3Config  `yaml:"http3"`
-	DNSPaths  []DNSPath    `yaml:"dns_paths"`
-	RateLimit RateLimitCfg `yaml:"rate_limit"`
+	Listen        string       `yaml:"listen"`
+	TLS           TLSConfig    `yaml:"tls"`
+	HTTP2         HTTP2Config  `yaml:"http2"`
+	HTTP3         HTTP3Config  `yaml:"http3"`
+	DNSPaths      []DNSPath    `yaml:"dns_paths"`
+	RateLimit     RateLimitCfg `yaml:"rate_limit"`
+	TrustedProxies []string    `yaml:"trusted_proxies"` // Trusted proxy IP ranges for real IP extraction
 }
 
 // TLSConfig TLS 配置

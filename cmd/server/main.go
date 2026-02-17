@@ -147,6 +147,13 @@ func main() {
 
 	// Create router
 	router := gin.New()
+
+	// Real IP middleware (must be before other middlewares that use ClientIP)
+	if len(cfg.Server.TrustedProxies) > 0 {
+		router.Use(middleware.RealIPMiddleware(cfg.Server.TrustedProxies))
+		log.Infof("Trusted proxies configured: %v", cfg.Server.TrustedProxies)
+	}
+
 	router.Use(middleware.RecoveryMiddleware(log))
 	router.Use(middleware.LoggingMiddleware(log))
 	router.Use(middleware.CORSMiddleware())

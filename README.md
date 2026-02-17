@@ -403,6 +403,70 @@ curl http://localhost:8080/health
 # Response: {"status":"ok"}
 ```
 
+## Trusted Proxies / Real IP
+
+When running behind a reverse proxy (nginx, Cloudflare, AWS ALB, etc.), configure trusted proxies to correctly extract client IP from proxy headers:
+
+```yaml
+server:
+  # Trusted proxy IP ranges (CIDR notation)
+  # Only trust headers from these IPs
+  trusted_proxies:
+    - 10.0.0.0/8          # Private network
+    - 172.16.0.0/12       # Private network
+    - 192.168.0.0/16      # Private network
+    - 103.21.244.0/22     # Cloudflare IPs
+    - 103.22.200.0/22     # Cloudflare IPs
+    - 103.31.4.0/22       # Cloudflare IPs
+    - 104.16.0.0/13       # Cloudflare IPs
+    - 104.24.0.0/14       # Cloudflare IPs
+    - 108.162.192.0/18    # Cloudflare IPs
+    - 131.0.72.0/22       # Cloudflare IPs
+    - 141.101.64.0/18     # Cloudflare IPs
+    - 162.158.0.0/15      # Cloudflare IPs
+    - 172.64.0.0/13       # Cloudflare IPs
+    - 173.245.48.0/20     # Cloudflare IPs
+    - 188.114.96.0/20     # Cloudflare IPs
+    - 190.93.240.0/20     # Cloudflare IPs
+    - 197.234.240.0/22    # Cloudflare IPs
+    - 198.41.128.0/17     # Cloudflare IPs
+  
+  # To trust all IPs (use with caution!)
+  # trusted_proxies:
+  #   - 0.0.0.0/0
+  #   - ::/0
+```
+
+### Supported Headers
+
+The following headers are checked in order:
+
+1. `X-Forwarded-For` - First IP is extracted if multiple IPs present
+2. `X-Real-IP` - Single IP
+3. `X-Client-IP` - Single IP
+4. `True-Client-IP` - Single IP (used by Cloudflare)
+
+### Example: Nginx Configuration
+
+```nginx
+server {
+    listen 443 ssl http2;
+    server_name dns.example.com;
+
+    location /dns-query {
+        proxy_pass http://127.0.0.1:8080;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+}
+```
+
+### Example: Cloudflare
+
+No additional configuration needed. Cloudflare automatically adds `X-Forwarded-For` and `CF-Connecting-IP` headers. Just add Cloudflare IP ranges to `trusted_proxies`.
+
 ## Project Structure
 
 ```
