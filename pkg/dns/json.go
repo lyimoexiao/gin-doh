@@ -1,7 +1,9 @@
 package dns
 
 import (
+	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"time"
 )
 
@@ -65,15 +67,36 @@ func WireToJSON(data []byte) (*JSONResponse, error) {
 			ttl = 0
 		}
 
+		// 格式化 data 字段
+		dataStr := a.RdataStr
+		// 对于未知类型或解析失败的情况，使用 RFC 8427 格式
+		if dataStr == "" || (a.Type != TypeA && a.Type != TypeAAAA && 
+			a.Type != TypeCNAME && a.Type != TypeMX && a.Type != TypeTXT &&
+			a.Type != TypeNS && a.Type != TypePTR && a.Type != TypeSOA &&
+			a.Type != TypeSRV && a.Type != TypeCAA) {
+			// 使用 RFC 8427 格式: \# <length> <hex-data>
+			if len(a.Rdata) > 0 && (dataStr == "" || dataStr == fmt.Sprintf("%x", a.Rdata)) {
+				dataStr = formatUnknownRdata(a.Rdata)
+			}
+		}
+
 		resp.Answer = append(resp.Answer, JSONAnswer{
 			Name: a.Name,
 			Type: int(a.Type),
 			TTL:  ttl,
-			Data: a.RdataStr,
+			Data: dataStr,
 		})
 	}
 
 	return resp, nil
+}
+
+// formatUnknownRdata 格式化未知类型的 Rdata (RFC 8427 格式)
+func formatUnknownRdata(rdata []byte) string {
+	if len(rdata) == 0 {
+		return "\\# 0"
+	}
+	return fmt.Sprintf("\\# %d %s", len(rdata), hex.EncodeToString(rdata))
 }
 
 // ToJSONBytes 转换为 JSON 字节

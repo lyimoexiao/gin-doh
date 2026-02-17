@@ -78,12 +78,12 @@ upstream:
       timeout: 10s
       # ECH 客户端配置 (可选，覆盖全局配置)
       ech:
-        enabled: false
+        enabled: true
         config_list: ""   # ECH 配置列表 (Base64 或文件路径)
     
-    - protocol: doh
-      url: https://dns.google/dns-query
-      timeout: 10s
+    # - protocol: doh
+    #   url: https://dns.google/dns-query
+    #   timeout: 10s
     
     # DoT 服务器
     # - protocol: dot
@@ -92,13 +92,13 @@ upstream:
     #   timeout: 10s
     
     # UDP DNS
-    - protocol: udp
-      address: 8.8.8.8:53
-      timeout: 5s
+    # - protocol: udp
+    #   address: 8.8.8.8:53
+    #   timeout: 5s
     
-    - protocol: udp
-      address: 1.1.1.1:53
-      timeout: 5s
+    # - protocol: udp
+    #   address: 1.1.1.1:53
+    #   timeout: 5s
     
     # TCP DNS
     # - protocol: tcp

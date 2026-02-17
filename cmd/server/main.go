@@ -64,6 +64,7 @@ func main() {
 
 	// 初始化全局 ECH 客户端配置 (用于连接上游 DoH 服务器)
 	var globalECHConfig *ech.ClientECHConfig
+	echConfigAvailable := false
 	if cfg.Server.TLS.ECH.ConfigListFile != "" {
 		globalECHConfig = ech.NewClientECHConfig()
 		if err := globalECHConfig.LoadConfigListFromFile(cfg.Server.TLS.ECH.ConfigListFile); err != nil {
@@ -71,11 +72,21 @@ func main() {
 			globalECHConfig = nil
 		} else {
 			log.Info("全局 ECH 客户端配置已加载")
+			echConfigAvailable = true
 		}
 	}
 
+	// 确定是否强制使用加密上游
+	forceEncrypted := cfg.Server.TLS.ECH.Enabled && cfg.Server.TLS.ECH.ForceEncryptedUpstream
+	if forceEncrypted {
+		log.Info("ECH 模式已启用，强制使用加密上游 (DoH/DoT)")
+	}
+
 	// 创建解析器
-	factory := upstream.NewFactory(globalProxy)
+	factory := upstream.NewFactory(globalProxy,
+		upstream.WithForceEncrypted(forceEncrypted),
+		upstream.WithECHAvailable(echConfigAvailable),
+	)
 	resolvers := make([]upstream.Resolver, 0, len(cfg.Upstream.Servers))
 	priorities := make([]int, 0, len(cfg.Upstream.Servers))
 

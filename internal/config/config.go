@@ -43,6 +43,9 @@ type ECHConfig struct {
 
 	// 客户端 ECH 配置 (用于上游 DoH 连接)
 	ConfigListFile string `yaml:"config_list_file"` // ECH 配置列表文件路径
+
+	// 强制使用加密上游 (当 ECH 启用时，禁止回落到 UDP/TCP)
+	ForceEncryptedUpstream bool `yaml:"force_encrypted_upstream"` // 强制使用加密上游
 }
 
 // HTTP2Config HTTP/2 配置

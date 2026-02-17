@@ -2,6 +2,8 @@ package upstream
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"time"
 
 	"github.com/lyimoexiao/gin-doh/internal/config"
@@ -11,14 +13,37 @@ import (
 
 // Factory 解析器工厂
 type Factory struct {
-	globalProxy *proxy.Manager
+	globalProxy        *proxy.Manager
+	forceEncrypted     bool   // 强制使用加密上游
+	echConfigAvailable bool   // ECH 配置是否可用
+}
+
+// FactoryOption 工厂选项
+type FactoryOption func(*Factory)
+
+// WithForceEncrypted 设置强制使用加密上游
+func WithForceEncrypted(force bool) FactoryOption {
+	return func(f *Factory) {
+		f.forceEncrypted = force
+	}
+}
+
+// WithECHAvailable 设置 ECH 配置可用状态
+func WithECHAvailable(available bool) FactoryOption {
+	return func(f *Factory) {
+		f.echConfigAvailable = available
+	}
 }
 
 // NewFactory 创建解析器工厂
-func NewFactory(globalProxy *proxy.Manager) *Factory {
-	return &Factory{
+func NewFactory(globalProxy *proxy.Manager, opts ...FactoryOption) *Factory {
+	f := &Factory{
 		globalProxy: globalProxy,
 	}
+	for _, opt := range opts {
+		opt(f)
+	}
+	return f
 }
 
 // CreateResolver 创建解析器
@@ -28,6 +53,13 @@ func (f *Factory) CreateResolver(cfg *config.UpstreamServer) (Resolver, error) {
 
 // CreateResolverWithECH 创建解析器 (支持 ECH 配置)
 func (f *Factory) CreateResolverWithECH(cfg *config.UpstreamServer, globalECHConfig *ech.ClientECHConfig) (Resolver, error) {
+	// 检查是否强制使用加密上游
+	if f.forceEncrypted || f.echConfigAvailable {
+		if cfg.Protocol == "udp" || cfg.Protocol == "tcp" {
+			return nil, fmt.Errorf("ECH enabled: protocol %s is not allowed, only encrypted protocols (doh, dot) are supported", cfg.Protocol)
+		}
+	}
+
 	// 确定使用的代理
 	var proxyMgr *proxy.Manager
 	var err error
@@ -51,6 +83,8 @@ func (f *Factory) CreateResolverWithECH(cfg *config.UpstreamServer, globalECHCon
 
 	// 准备 ECH 配置
 	var echConfig *ech.ClientECHConfig
+	echEnabled := false
+
 	if cfg.ECH != nil && cfg.ECH.Enabled {
 		// 使用服务器级 ECH 配置
 		echConfig = ech.NewClientECHConfig()
@@ -59,13 +93,15 @@ func (f *Factory) CreateResolverWithECH(cfg *config.UpstreamServer, globalECHCon
 			if err := echConfig.LoadConfigListFromBase64(cfg.ECH.ConfigList); err != nil {
 				// 尝试作为文件路径加载
 				if err := echConfig.LoadConfigListFromFile(cfg.ECH.ConfigList); err != nil {
-					return nil, err
+					return nil, fmt.Errorf("failed to load ECH config: %w", err)
 				}
 			}
 		}
+		echEnabled = true
 	} else if globalECHConfig != nil && len(globalECHConfig.ConfigList) > 0 {
 		// 使用全局 ECH 配置
 		echConfig = globalECHConfig
+		echEnabled = true
 	}
 
 	// 根据协议创建解析器
@@ -75,7 +111,7 @@ func (f *Factory) CreateResolverWithECH(cfg *config.UpstreamServer, globalECHCon
 	case "tcp":
 		return NewTCPResolver(cfg.Address, timeout), nil
 	case "doh":
-		if echConfig != nil {
+		if echEnabled && echConfig != nil {
 			return NewDoHResolver(cfg.URL, timeout, proxyMgr, WithECH(echConfig)), nil
 		}
 		return NewDoHResolver(cfg.URL, timeout, proxyMgr), nil
@@ -86,8 +122,11 @@ func (f *Factory) CreateResolverWithECH(cfg *config.UpstreamServer, globalECHCon
 	}
 }
 
-// ErrUnsupportedProtocol 不支持的协议错误
-var ErrUnsupportedProtocol = &ProtocolError{}
+// 错误定义
+var (
+	ErrUnsupportedProtocol  = &ProtocolError{}
+	ErrUnencryptedForbidden = errors.New("ECH mode requires encrypted upstream (doh or dot)")
+)
 
 // ProtocolError 协议错误
 type ProtocolError struct {

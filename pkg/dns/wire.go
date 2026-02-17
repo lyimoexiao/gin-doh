@@ -24,6 +24,8 @@ const (
 	TypeSOA   = 6
 	TypeSRV   = 33
 	TypeCAA   = 257
+	TypeHTTPS = 65  // HTTPS SVCB 记录 (RFC 9460)
+	TypeSVCB  = 64  // SVCB 记录 (RFC 9460)
 
 	// DNS 响应码
 	RcodeNoError  = 0
@@ -68,6 +70,7 @@ type Message struct {
 	Answers   []ResourceRecord
 	Authority []ResourceRecord
 	Additional []ResourceRecord
+	rawData   []byte // 保存原始数据用于解析压缩指针
 }
 
 // RcodeToString 响应码转字符串
@@ -113,6 +116,10 @@ func TypeToString(t uint16) string {
 		return "SRV"
 	case TypeCAA:
 		return "CAA"
+	case TypeHTTPS:
+		return "HTTPS"
+	case TypeSVCB:
+		return "SVCB"
 	default:
 		return fmt.Sprintf("TYPE%d", t)
 	}
@@ -141,7 +148,17 @@ func StringToType(s string) uint16 {
 		return TypeSRV
 	case "CAA":
 		return TypeCAA
+	case "HTTPS":
+		return TypeHTTPS
+	case "SVCB":
+		return TypeSVCB
 	default:
+		// 尝试解析 TYPExxx 格式
+		if len(s) > 4 && strings.ToUpper(s[:4]) == "TYPE" {
+			var num uint16
+			fmt.Sscanf(s[4:], "%d", &num)
+			return num
+		}
 		return 0
 	}
 }
@@ -161,6 +178,7 @@ func ParseMessage(data []byte) (*Message, error) {
 			Nscount: binary.BigEndian.Uint16(data[8:10]),
 			Arcount: binary.BigEndian.Uint16(data[10:12]),
 		},
+		rawData: data, // 保存原始数据
 	}
 
 	offset := HeaderSize
@@ -177,7 +195,7 @@ func ParseMessage(data []byte) (*Message, error) {
 
 	// 解析回答
 	for i := uint16(0); i < msg.Header.Ancount; i++ {
-		rr, newOffset, err := parseResourceRecord(data, offset)
+		rr, newOffset, err := parseResourceRecordWithContext(data, offset, msg.rawData)
 		if err != nil {
 			return nil, err
 		}
@@ -206,8 +224,13 @@ func parseQuestion(data []byte, offset int) (Question, int, error) {
 	}, newOffset + 4, nil
 }
 
-// parseResourceRecord 解析资源记录
+// parseResourceRecord 解析资源记录 (不包含压缩指针上下文)
 func parseResourceRecord(data []byte, offset int) (*ResourceRecord, int, error) {
+	return parseResourceRecordWithContext(data, offset, data)
+}
+
+// parseResourceRecordWithContext 解析资源记录 (带完整消息上下文)
+func parseResourceRecordWithContext(data []byte, offset int, fullMsg []byte) (*ResourceRecord, int, error) {
 	name, newOffset, err := parseName(data, offset)
 	if err != nil {
 		return nil, 0, err
@@ -225,11 +248,14 @@ func parseResourceRecord(data []byte, offset int) (*ResourceRecord, int, error) 
 	}
 
 	rdlength := binary.BigEndian.Uint16(data[newOffset+8 : newOffset+10])
+	rdataStart := newOffset + 10
 	rr.Rdata = make([]byte, rdlength)
-	copy(rr.Rdata, data[newOffset+10:newOffset+10+int(rdlength)])
-	rr.RdataStr = formatRdata(rr.Type, rr.Rdata)
+	copy(rr.Rdata, data[rdataStart:rdataStart+int(rdlength)])
+	
+	// 使用完整消息数据格式化 Rdata，支持压缩指针
+	rr.RdataStr = formatRdataWithContext(rr.Type, rr.Rdata, fullMsg, rdataStart)
 
-	return rr, newOffset + 10 + int(rdlength), nil
+	return rr, rdataStart + int(rdlength), nil
 }
 
 // parseName 解析域名（支持压缩）
@@ -293,39 +319,218 @@ func parseName(data []byte, offset int) (string, int, error) {
 	return strings.Join(labels, ".") + ".", offset, nil
 }
 
-// formatRdata 格式化 Rdata 为字符串
+// formatRdata 格式化 Rdata 为字符串 (无消息上下文版本)
+
 func formatRdata(rrtype uint16, rdata []byte) string {
+
+	return formatRdataWithContext(rrtype, rdata, nil, 0)
+
+}
+
+
+
+// formatRdataWithMessage 格式化 Rdata 为字符串 (带消息上下文支持压缩指针)
+
+func formatRdataWithMessage(rrtype uint16, rdata []byte, fullMsg []byte) string {
+
+	return formatRdataWithContext(rrtype, rdata, fullMsg, 0)
+
+}
+
+
+
+// formatRdataWithContext 格式化 Rdata 为字符串 (完整版本)
+
+func formatRdataWithContext(rrtype uint16, rdata []byte, fullMsg []byte, rdataOffset int) string {
+
 	switch rrtype {
+
 	case TypeA:
+
 		if len(rdata) == 4 {
+
 			return net.IP(rdata).String()
+
 		}
+
 	case TypeAAAA:
+
 		if len(rdata) == 16 {
+
 			return net.IP(rdata).String()
+
 		}
+
 	case TypeCNAME, TypeNS, TypePTR:
-		name, _, _ := parseName(append([]byte{byte(len(rdata))}, rdata...), 0)
-		return name
-	case TypeMX:
-		if len(rdata) >= 3 {
-			priority := binary.BigEndian.Uint16(rdata[0:2])
-			name, _, _ := parseName(append([]byte{byte(len(rdata) - 2)}, rdata[2:]...), 0)
-			return fmt.Sprintf("%d %s", priority, name)
-		}
-	case TypeTXT:
-		var txts []string
-		for i := 0; i < len(rdata); {
-			l := int(rdata[i])
-			if i+1+l > len(rdata) {
-				break
+
+		if len(rdata) > 0 {
+
+			// 如果有完整消息，尝试使用压缩指针解析
+
+			if fullMsg != nil && len(fullMsg) > 0 {
+
+				name, _, err := parseName(fullMsg, rdataOffset)
+
+				if err == nil && name != "." {
+
+					return name
+
+				}
+
 			}
-			txts = append(txts, string(rdata[i+1:i+1+l]))
-			i += 1 + l
+
+			// 回退到简单解析
+
+			name, _, err := parseNameSimple(rdata, 0)
+
+			if err == nil && name != "." {
+
+				return name
+
+			}
+
 		}
+
+	case TypeMX:
+
+		if len(rdata) >= 3 {
+
+			priority := binary.BigEndian.Uint16(rdata[0:2])
+
+			if fullMsg != nil && len(fullMsg) > 0 {
+
+				name, _, err := parseName(fullMsg, rdataOffset+2)
+
+				if err == nil && name != "." {
+
+					return fmt.Sprintf("%d %s", priority, name)
+
+				}
+
+			}
+
+			name, _, _ := parseNameSimple(rdata, 2)
+
+			return fmt.Sprintf("%d %s", priority, name)
+
+		}
+
+	case TypeTXT:
+
+		var txts []string
+
+		for i := 0; i < len(rdata); {
+
+			l := int(rdata[i])
+
+			if i+1+l > len(rdata) {
+
+				break
+
+			}
+
+			txts = append(txts, string(rdata[i+1:i+1+l]))
+
+			i += 1 + l
+
+		}
+
 		return strings.Join(txts, " ")
+
+		case TypeHTTPS, TypeSVCB:
+
+			// HTTPS/SVCB 记录格式: priority (2 bytes) + target name + params
+
+			// 对于 JSON 输出，我们让上层处理为 RFC 8427 格式
+
+			// 这里返回空字符串，让 JSON 格式化器使用原始数据
+
+			return ""
+
 	}
+
 	return fmt.Sprintf("%x", rdata)
+
+}
+
+
+
+// parseNameSimple 简单域名解析 (处理 Rdata 中的域名)
+
+func parseNameSimple(data []byte, offset int) (string, int, error) {
+
+	var labels []string
+
+
+
+	for {
+
+		if offset >= len(data) {
+
+			break
+
+		}
+
+
+
+		b := data[offset]
+
+
+
+		// 处理结束符
+
+		if b == 0 {
+
+			offset++
+
+			break
+
+		}
+
+
+
+		// 检查压缩指针 (0xC0 = 192)
+
+		if b&0xC0 == 0xC0 {
+
+			// 压缩指针 - 在 Rdata 上下文中无法解析
+
+			// 跳过指针的两个字节
+
+			offset += 2
+
+			break
+
+		}
+
+
+
+		labelLen := int(b)
+
+		if offset+1+labelLen > len(data) {
+
+			break
+
+		}
+
+
+
+		labels = append(labels, string(data[offset+1:offset+1+labelLen]))
+
+		offset += 1 + labelLen
+
+	}
+
+
+
+	if len(labels) == 0 {
+
+		return ".", offset, nil
+
+	}
+
+	return strings.Join(labels, ".") + ".", offset, nil
+
 }
 
 // EncodeBase64URL Base64 URL 安全编码
