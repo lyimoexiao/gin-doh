@@ -886,6 +886,49 @@ func InjectECS(query []byte, ecs string) ([]byte, error) {
 	return addOPTWithECS(query, ecsData)
 }
 
+// HasECS checks if the DNS query already contains an ECS option
+// Returns true if ECS is present in the query
+func HasECS(query []byte) bool {
+	if len(query) < HeaderSize {
+		return false
+	}
+
+	// Find OPT record
+	optOffset, err := findOPTRecord(query)
+	if err != nil || optOffset < 0 {
+		return false
+	}
+
+	// Parse OPT RDATA to check for ECS option
+	rdataLenOffset := optOffset + 1 + 2 + 2 + 4
+	if rdataLenOffset+2 > len(query) {
+		return false
+	}
+
+	rdataLen := int(binary.BigEndian.Uint16(query[rdataLenOffset : rdataLenOffset+2]))
+	rdataStart := rdataLenOffset + 2
+	rdataEnd := rdataStart + rdataLen
+
+	if rdataEnd > len(query) {
+		return false
+	}
+
+	// Scan options for ECS
+	offset := rdataStart
+	for offset+4 <= rdataEnd {
+		optCode := binary.BigEndian.Uint16(query[offset : offset+2])
+		optLen := int(binary.BigEndian.Uint16(query[offset+2 : offset+4]))
+
+		if optCode == EDNS0OptionECS {
+			return true
+		}
+
+		offset += 4 + optLen
+	}
+
+	return false
+}
+
 // findOPTRecord finds the OPT record offset in the additional section
 // Returns -1 if not found, or the offset if found
 func findOPTRecord(query []byte) (int, error) {

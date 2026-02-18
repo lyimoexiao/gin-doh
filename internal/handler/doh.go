@@ -108,7 +108,8 @@ func (h *DoHHandler) parseAndValidate(c *gin.Context, start time.Time) (query []
 // executeQuery executes the DNS query and returns the response
 func (h *DoHHandler) executeQuery(c *gin.Context, query []byte, _ string, ecsInjected bool) (response []byte, resolver upstream.Resolver, rcode int, latency time.Duration, err error) {
 	// For POST and Wire Format GET, try to inject ECS from client IP
-	if !ecsInjected {
+	// But only if the query doesn't already have an ECS option
+	if !ecsInjected && !dns.HasECS(query) {
 		clientIP := middleware.GetRealIP(c)
 		ecs := dns.ClientIPToECS(clientIP)
 		if ecs != "" {
